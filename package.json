@@ -1,0 +1,25 @@
+{
+  "name": "entao_bora_react",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "dev": "npm --prefix react-web run dev",
+    "build": "npm --prefix react-web run build",
+    "test": "npm --prefix react-web test",
+    "preview": "npm --prefix react-web run preview"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@hookform/resolvers": "^5.9.1",
+    "@tanstack/react-query": "^5.102.8",
+    "firebase": "^12.18.0",
+    "lucide-react": "^1.43.0",
+    "react-hook-form": "^7.87.0",
+    "react-router-dom": "^7.18.3",
+    "zod": "^4.5.4",
+    "zustand": "^5.0.15"
+  }
+}
