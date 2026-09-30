@@ -1,0 +1,693 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() { return request.auth != null; }
+    function profile() { return get(/databases/$(database)/documents/users/$(request.auth.uid)).data; }
+    function active() { return signedIn() && profile().get('active', true) == true; }
+    function admin() { return active() && profile().get('role', 'user') == 'admin'; }
+    function canCreatePlace() { return active() && profile().get('role', 'user') in ['partner', 'admin']; }
+    function referenceId(value) { return value is string ? value : (value is map ? value.get('id', '') : ''); }
+    function responsible(owner) {
+      let id = referenceId(owner);
+      return id != '' && (id == request.auth.uid ||
+        (profile().get('role', 'user') == 'partner' && profile().get('partnerId', null) == id));
+    }
+    function memberPath(placeId) { return /databases/$(database)/documents/places/$(placeId)/members/$(request.auth.uid); }
+    function placeAccess(placeId, roles) {
+      return active() && (profile().get('role', 'user') == 'admin' ||
+        (exists(memberPath(placeId))
+          ? get(memberPath(placeId)).data.active == true && get(memberPath(placeId)).data.role in roles
+          : responsible(get(/databases/$(database)/documents/places/$(placeId)).data.get('ownerId', ''))));
+    }
+    function eventAccess(event, transfer) {
+      let placeId = event.get('placeId', null);
+      return active() && (profile().get('role', 'user') == 'admin' ||
+        (placeId is string && placeId != '' && placeAccess(placeId, transfer ? ['owner'] : ['owner', 'manager'])) ||
+        (!(placeId is string && placeId != '' && exists(memberPath(placeId))) &&
+          responsible(event.get('createdBy', '')) && (!transfer || profile().get('role', 'user') == 'partner')));
+    }
+    function validLink(event) {
+      let placeId = event.get('placeId', null);
+      return placeId == null || (placeId is string && placeId != '' &&
+        exists(/databases/$(database)/documents/places/$(placeId)) && placeAccess(placeId, ['owner', 'manager']));
+    }
+    function menuEnabled(placeId) {
+      let path = /databases/$(database)/documents/places/$(placeId)/settings/modules;
+      return !exists(path) || (get(path).data.schemaVersion == 1 && get(path).data.enabled.get('menu', true) == true);
+    }
+    function sessionsEnabled(placeId) {
+      let path = /databases/$(database)/documents/places/$(placeId)/settings/modules;
+      return exists(path) && get(path).data.schemaVersion == 1 && get(path).data.enabled.get('serviceSessions', false) == true;
+    }
+    function tablesEnabled(placeId) {
+      let path = /databases/$(database)/documents/places/$(placeId)/settings/modules;
+      return exists(path) && get(path).data.schemaVersion == 1 && get(path).data.enabled.get('tables', false) == true && paidEntitled(placeId, 'tables');
+    }
+    function paidEntitled(placeId, feature) {
+      let path = /databases/$(database)/documents/places/$(placeId)/settings/entitlements;
+      let value = get(path).data;
+      return exists(path) && value.schemaVersion == 1 &&
+        value.status in ['active', 'trialing'] &&
+        (value.validUntil == null || value.validUntil > request.time) &&
+        value.features.get(feature, false) == true;
+    }
+    function ordersEnabled(placeId) {
+      let path = /databases/$(database)/documents/places/$(placeId)/settings/modules;
+      return exists(path) && get(path).data.schemaVersion == 1 && get(path).data.enabled.get('orders', false) == true && paidEntitled(placeId, 'orders');
+    }
+
+    match /users/{uid} {
+      function validNotificationPreferences() {
+        let p = request.resource.data.get('notificationPreferences', null);
+        return !('notificationPreferences' in request.resource.data) ||
+          (p is map && p.keys().hasOnly(['events', 'orders', 'marketing']) &&
+            p.events is bool && p.orders is bool && p.marketing is bool);
+      }
+      // Preserve legacy public author hydration (Flutter reads the event creator).
+      // A separate public profile projection is needed before restricting these reads.
+      allow get: if true;
+      allow list: if admin();
+      allow create: if signedIn() && request.auth.uid == uid && request.resource.data.id == uid &&
+        request.resource.data.role == 'user' && request.resource.data.active == true &&
+        request.resource.data.partnerId == null &&
+        request.resource.data.keys().hasOnly(['id', 'name', 'email', 'photoUrl', 'isAnonymous', 'updatedAt', 'role', 'active', 'partnerId', 'notificationsEnabled', 'notificationPreferences', 'locationSharingEnabled', 'autoCheckinConsentEnabled', 'autoCheckinConsentUpdatedAt']) && validNotificationPreferences();
+      allow update: if admin() || (signedIn() && request.auth.uid == uid &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'id', 'name', 'email', 'photoUrl', 'isAnonymous', 'updatedAt',
+          'notificationsEnabled', 'notificationPreferences', 'notificationUpdatedAt', 'locationSharingEnabled', 'lastKnownLocation', 'locationUpdatedAt',
+          'autoCheckinConsentEnabled', 'autoCheckinConsentUpdatedAt'
+        ]) && request.resource.data.id == uid && validNotificationPreferences());
+      match /notification_tokens/{tokenId} {
+        function validToken() {
+          let d = request.resource.data;
+          return d.keys().hasOnly(['token', 'platform', 'isWeb', 'enabled', 'updatedAt']) &&
+            d.token is string && d.token.size() > 20 && d.token.size() <= 4096 &&
+            d.platform == 'web' && d.isWeb == true && d.enabled is bool && d.updatedAt == request.time;
+        }
+        allow read: if active() && request.auth.uid == uid;
+        allow create, update: if active() && request.auth.uid == uid && validToken();
+        allow delete: if active() && request.auth.uid == uid;
+      }
+      match /notifications/{notificationId} {
+        // Trusted delivery workers use the Admin SDK. Clients only read and mark their own messages as read.
+        allow read: if active() && request.auth.uid == uid;
+        allow create, delete: if false;
+        allow update: if active() && request.auth.uid == uid &&
+          request.resource.data.diff(resource.data).affectedKeys().hasOnly(['readAt']) &&
+          request.resource.data.readAt == request.time;
+      }
+    }
+
+    match /commercialPlans/{planKey} {
+      // Commercial configuration is published by trusted billing/admin infrastructure.
+      allow read: if active() && resource.data.active == true;
+      allow write: if false;
+    }
+
+    match /places/{placeId} {
+      function validAutoCheckinSettings() {
+        let d = request.resource.data.get('autoCheckinSettings', {});
+        return d is map && d.keys().hasOnly(['autoCheckinEnabled', 'radiusMeters', 'minimumStayMinutes']) &&
+          (!('autoCheckinEnabled' in d) || d.autoCheckinEnabled is bool) &&
+          (!('radiusMeters' in d) || (d.radiusMeters is number && d.radiusMeters > 0 && d.radiusMeters - d.radiusMeters == 0)) &&
+          (!('minimumStayMinutes' in d) || (d.minimumStayMinutes is number && d.minimumStayMinutes > 0 && d.minimumStayMinutes - d.minimumStayMinutes == 0));
+      }
+      allow read: if true;
+      allow create: if canCreatePlace() && request.resource.data.ownerId == request.auth.uid && request.resource.data.id == placeId && validAutoCheckinSettings();
+      allow update: if placeAccess(placeId, ['owner', 'manager']) &&
+        validAutoCheckinSettings() &&
+        referenceId(request.resource.data.ownerId) == referenceId(resource.data.ownerId) &&
+        request.resource.data.get('id', placeId) == placeId &&
+        (request.resource.data.get('menuSchemaVersion', 1) == resource.data.get('menuSchemaVersion', 1) || (menuEditor() && resource.data.get('menuSchemaVersion', 1) != 2 && request.resource.data.menuSchemaVersion == 2)) &&
+        (resource.data.get('menuSchemaVersion', 1) != 2 || (request.resource.data.get('menuItems', []) == resource.data.get('menuItems', []) && request.resource.data.get('menuCategories', []) == resource.data.get('menuCategories', []))) &&
+        ((request.resource.data.get('menuItems', []) == resource.data.get('menuItems', []) &&
+          request.resource.data.get('menuCategories', []) == resource.data.get('menuCategories', [])) || menuEnabled(placeId));
+      function menuEditor() { return placeAccess(placeId, ['owner', 'manager']) && menuEnabled(placeId); }
+      function inventoryEnabled() {
+        let path = /databases/$(database)/documents/places/$(placeId)/settings/modules;
+        return exists(path) && get(path).data.schemaVersion == 1 && get(path).data.enabled.get('inventory', false) == true && paidEntitled(placeId, 'inventory');
+      }
+      function inventoryEditor() { return placeAccess(placeId, ['owner', 'manager']) && inventoryEnabled(); }
+      function inventoryReader() { return placeAccess(placeId, ['owner', 'manager', 'employee']) && inventoryEnabled(); }
+      function purchasesEnabled() {
+        let path = /databases/$(database)/documents/places/$(placeId)/settings/modules;
+        return exists(path) && get(path).data.schemaVersion == 1 && get(path).data.enabled.get('purchases', false) == true && paidEntitled(placeId, 'purchases');
+      }
+      function purchasesEditor() { return placeAccess(placeId, ['owner', 'manager']) && purchasesEnabled() && inventoryEnabled(); }
+      function notificationsEnabled() {
+        let path = /databases/$(database)/documents/places/$(placeId)/settings/modules;
+        return exists(path) && get(path).data.schemaVersion == 1 && get(path).data.enabled.get('notifications', false) == true && paidEntitled(placeId, 'notifications');
+      }
+      match /notificationCampaigns/{campaignId} {
+        function validCampaign() {
+          let d = request.resource.data;
+          return d.keys().hasOnly(['title', 'body', 'kind', 'status', 'createdBy', 'createdAt', 'updatedAt']) &&
+            d.title is string && d.title.size() > 0 && d.title.size() <= 120 &&
+            d.body is string && d.body.size() > 0 && d.body.size() <= 500 &&
+            d.kind == 'marketing' && d.status in ['draft', 'cancelled', 'queued', 'sent'] &&
+            d.createdBy is string && d.createdAt is timestamp && d.updatedAt == request.time;
+        }
+        allow read: if placeAccess(placeId, ['owner']) && notificationsEnabled();
+        allow create: if placeAccess(placeId, ['owner']) && notificationsEnabled() && validCampaign() &&
+          request.resource.data.status == 'draft' && request.resource.data.createdBy == request.auth.uid &&
+          request.resource.data.createdAt == request.time;
+        allow update: if placeAccess(placeId, ['owner']) && notificationsEnabled() && validCampaign() &&
+          resource.data.status == 'draft' && request.resource.data.status == 'cancelled' &&
+          request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'updatedAt']);
+        allow delete: if false;
+      }
+      function stockValue(n) { return n is int && n >= 0 && n <= 1000000000000; }
+      match /inventoryItems/{itemId} {
+        function validItem() {
+          let d = request.resource.data;
+          return d.keys().hasOnly(['name', 'unit', 'minimumMilli', 'active', 'stockMilli', 'lastMovementId', 'createdAt', 'updatedAt']) &&
+            d.name is string && d.name.size() > 0 && d.name.size() <= 100 && d.unit in ['un', 'g', 'ml'] &&
+            stockValue(d.minimumMilli) && stockValue(d.stockMilli) && d.active is bool &&
+            d.createdAt is timestamp && d.updatedAt == request.time;
+        }
+        function balanceMovement() {
+          let d = request.resource.data;
+          let path = /databases/$(database)/documents/places/$(placeId)/inventoryItems/$(itemId)/movements/$(d.lastMovementId);
+          return resource.data.active == true && d.lastMovementId is string && d.lastMovementId != resource.data.lastMovementId &&
+            !exists(path) && getAfter(path).data.beforeMilli == resource.data.stockMilli &&
+            getAfter(path).data.afterMilli == d.stockMilli &&
+            d.diff(resource.data).affectedKeys().hasOnly(['stockMilli', 'lastMovementId', 'updatedAt']);
+        }
+        allow read: if inventoryReader();
+        allow create: if inventoryEditor() && validItem() && request.resource.data.stockMilli == 0 &&
+          request.resource.data.lastMovementId == null && request.resource.data.createdAt == request.time;
+        allow update: if inventoryEditor() && validItem() && request.resource.data.unit == resource.data.unit &&
+          request.resource.data.createdAt == resource.data.createdAt &&
+          (request.resource.data.diff(resource.data).affectedKeys().hasOnly(['name', 'minimumMilli', 'active', 'updatedAt']) || balanceMovement());
+        allow delete: if false;
+        match /movements/{movementId} {
+          function validMovement() {
+            let d = request.resource.data;
+            let path = /databases/$(database)/documents/places/$(placeId)/inventoryItems/$(itemId);
+            let before = get(path).data;
+            let after = getAfter(path).data;
+            return d.keys().hasOnly(['itemId', 'type', 'deltaMilli', 'beforeMilli', 'afterMilli', 'unit', 'reason', 'createdBy', 'createdAt', 'purchaseOrderId']) &&
+              d.itemId == itemId && d.type in ['entry', 'exit', 'adjustment', 'loss'] &&
+              d.deltaMilli is int && d.deltaMilli != 0 && d.deltaMilli >= -1000000000000 && d.deltaMilli <= 1000000000000 &&
+              (d.type == 'entry' ? d.deltaMilli > 0 : (d.type in ['exit', 'loss'] ? d.deltaMilli < 0 : true)) &&
+              stockValue(d.beforeMilli) && stockValue(d.afterMilli) && d.afterMilli == d.beforeMilli + d.deltaMilli &&
+              d.beforeMilli == before.stockMilli && d.afterMilli == after.stockMilli && before.active == true &&
+              d.unit == before.unit && after.lastMovementId == movementId && before.lastMovementId != movementId &&
+              d.reason is string && d.reason.size() > 0 && d.reason.size() <= 300 &&
+              (!('purchaseOrderId' in d) || (d.purchaseOrderId is string && d.purchaseOrderId.size() > 0)) &&
+              d.createdBy == request.auth.uid && d.createdAt == request.time;
+          }
+          allow read: if inventoryReader();
+          allow create: if inventoryEditor() && validMovement();
+          allow update, delete: if false;
+        }
+      }
+      match /inventoryRecipes/{menuItemId} {
+        function componentAt(components, index) {
+          let keys = components.keys();
+          return keys.size() <= index || (
+            keys[index].matches('^[^/]+$') &&
+            components[keys[index]].keys().hasOnly(['unit', 'quantityMilli']) &&
+            stockValue(components[keys[index]].quantityMilli) && components[keys[index]].quantityMilli > 0 &&
+            components[keys[index]].unit in ['un', 'g', 'ml']);
+        }
+        function validRecipe() {
+          let d = request.resource.data;
+          return d.keys().hasOnly(['menuItemId', 'components', 'revision', 'active', 'createdAt', 'updatedAt', 'updatedBy']) &&
+            d.menuItemId == menuItemId && exists(/databases/$(database)/documents/places/$(placeId)/menuItems/$(menuItemId)) &&
+            d.components is map && d.components.size() > 0 && d.components.size() <= 5 &&
+            componentAt(d.components, 0) && componentAt(d.components, 1) && componentAt(d.components, 2) &&
+            componentAt(d.components, 3) && componentAt(d.components, 4) &&
+            d.active is bool && d.revision is int && d.revision > 0 && d.revision <= 2147483647 &&
+            d.updatedAt == request.time && d.updatedBy == request.auth.uid;
+        }
+        allow read: if inventoryReader();
+        allow create: if inventoryEditor() && validRecipe() && request.resource.data.revision == 1 && request.resource.data.createdAt == request.time;
+        allow update: if inventoryEditor() && validRecipe() && request.resource.data.revision == resource.data.revision + 1 &&
+          request.resource.data.createdAt == resource.data.createdAt;
+        allow delete: if false;
+      }
+      match /suppliers/{supplierId} {
+        function validSupplier() {
+          let d = request.resource.data;
+          return d.keys().hasOnly(['name', 'contact', 'active', 'createdAt', 'updatedAt', 'createdBy']) &&
+            d.name is string && d.name.size() > 0 && d.name.size() <= 120 && d.contact is string && d.contact.size() <= 300 &&
+            d.active is bool && d.createdAt is timestamp && d.updatedAt == request.time && d.createdBy is string;
+        }
+        allow read: if placeAccess(placeId, ['owner', 'manager', 'employee']) && purchasesEnabled();
+        allow create: if purchasesEditor() && validSupplier() && request.resource.data.createdAt == request.time && request.resource.data.createdBy == request.auth.uid;
+        allow update: if purchasesEditor() && validSupplier() && request.resource.data.createdAt == resource.data.createdAt &&
+          request.resource.data.createdBy == resource.data.createdBy && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['name', 'contact', 'active', 'updatedAt']);
+        allow delete: if false;
+      }
+      match /purchaseOrders/{orderId} {
+        function itemCost1() { return getAfter(/databases/$(database)/documents/places/$(placeId)/purchaseItems/$(orderId + '_1')).data.totalCostCents; }
+        function itemCost2() { return request.resource.data.itemCount < 2 ? 0 : getAfter(/databases/$(database)/documents/places/$(placeId)/purchaseItems/$(orderId + '_2')).data.totalCostCents; }
+        function itemCost3() { return request.resource.data.itemCount < 3 ? 0 : getAfter(/databases/$(database)/documents/places/$(placeId)/purchaseItems/$(orderId + '_3')).data.totalCostCents; }
+        function itemCost4() { return request.resource.data.itemCount < 4 ? 0 : getAfter(/databases/$(database)/documents/places/$(placeId)/purchaseItems/$(orderId + '_4')).data.totalCostCents; }
+        function itemCost5() { return request.resource.data.itemCount < 5 ? 0 : getAfter(/databases/$(database)/documents/places/$(placeId)/purchaseItems/$(orderId + '_5')).data.totalCostCents; }
+        function receivedItem1() { let d = getAfter(/databases/$(database)/documents/places/$(placeId)/purchaseItems/$(orderId + '_1')).data; return d.receivedMilli == d.quantityMilli; }
+        function receivedItem2() { let d = resource.data.itemCount < 2 ? null : getAfter(/databases/$(database)/documents/places/$(placeId)/purchaseItems/$(orderId + '_2')).data; return resource.data.itemCount < 2 || d.receivedMilli == d.quantityMilli; }
+        function receivedItem3() { let d = resource.data.itemCount < 3 ? null : getAfter(/databases/$(database)/documents/places/$(placeId)/purchaseItems/$(orderId + '_3')).data; return resource.data.itemCount < 3 || d.receivedMilli == d.quantityMilli; }
+        function receivedItem4() { let d = resource.data.itemCount < 4 ? null : getAfter(/databases/$(database)/documents/places/$(placeId)/purchaseItems/$(orderId + '_4')).data; return resource.data.itemCount < 4 || d.receivedMilli == d.quantityMilli; }
+        function receivedItem5() { let d = resource.data.itemCount < 5 ? null : getAfter(/databases/$(database)/documents/places/$(placeId)/purchaseItems/$(orderId + '_5')).data; return resource.data.itemCount < 5 || d.receivedMilli == d.quantityMilli; }
+        function validOrder() {
+          let d = request.resource.data;
+          return d.keys().hasOnly(['supplierId', 'status', 'notes', 'itemCount', 'totalCostCents', 'orderedAt', 'receivedAt', 'createdBy', 'receivedBy', 'receiptOperationId', 'createdAt', 'updatedAt']) &&
+            d.supplierId is string && d.notes is string && d.notes.size() <= 1000 && d.itemCount is int && d.itemCount > 0 && d.itemCount <= 5 &&
+            d.totalCostCents is int && d.totalCostCents >= 0 && d.status in ['ordered', 'received', 'cancelled'] &&
+            d.orderedAt is timestamp && d.createdAt is timestamp && d.updatedAt == request.time && d.createdBy is string;
+        }
+        allow read: if placeAccess(placeId, ['owner', 'manager', 'employee']) && purchasesEnabled();
+        allow create: if purchasesEditor() && validOrder() && request.resource.data.status == 'ordered' &&
+          request.resource.data.createdBy == request.auth.uid && request.resource.data.createdAt == request.time &&
+          request.resource.data.orderedAt == request.time && request.resource.data.receivedAt == null && request.resource.data.receivedBy == null &&
+          get(/databases/$(database)/documents/places/$(placeId)/suppliers/$(request.resource.data.supplierId)).data.active == true &&
+          request.resource.data.totalCostCents == itemCost1() + itemCost2() + itemCost3() + itemCost4() + itemCost5();
+        allow update: if purchasesEditor() && validOrder() && resource.data.status == 'ordered' &&
+          request.resource.data.status == 'received' && request.resource.data.receivedAt == request.time &&
+          request.resource.data.receivedBy == request.auth.uid && request.resource.data.receiptOperationId is string &&
+          receivedItem1() && receivedItem2() && receivedItem3() && receivedItem4() && receivedItem5() &&
+          request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'receivedAt', 'receivedBy', 'receiptOperationId', 'updatedAt']);
+        allow delete: if false;
+      }
+      match /purchaseItems/{purchaseItemId} {
+        function validPurchaseItem() {
+          let d = request.resource.data;
+          return d.keys().hasOnly(['purchaseOrderId', 'inventoryItemId', 'name', 'unit', 'quantityMilli', 'receivedMilli', 'unitCostMicros', 'totalCostCents', 'receivedAt', 'receivedBy']) &&
+            d.purchaseOrderId is string && purchaseItemId.matches('^' + d.purchaseOrderId + '_[1-5]$') &&
+            d.inventoryItemId is string && d.name is string && d.name.size() > 0 && d.name.size() <= 100 && d.unit in ['un', 'g', 'ml'] &&
+            stockValue(d.quantityMilli) && d.quantityMilli > 0 && stockValue(d.receivedMilli) && d.receivedMilli <= d.quantityMilli &&
+            d.unitCostMicros is int && d.unitCostMicros >= 0 && d.unitCostMicros <= 1000000000000 &&
+            d.totalCostCents is int && d.totalCostCents >= 0 &&
+            d.totalCostCents >= (d.quantityMilli * d.unitCostMicros / 10000000) - 0.5 &&
+            d.totalCostCents <= (d.quantityMilli * d.unitCostMicros / 10000000) + 0.5;
+        }
+        allow read: if placeAccess(placeId, ['owner', 'manager', 'employee']) && purchasesEnabled();
+        allow create: if purchasesEditor() && validPurchaseItem() && request.resource.data.receivedMilli == 0 &&
+          getAfter(/databases/$(database)/documents/places/$(placeId)/purchaseOrders/$(request.resource.data.purchaseOrderId)).data.status == 'ordered' &&
+          get(/databases/$(database)/documents/places/$(placeId)/inventoryItems/$(request.resource.data.inventoryItemId)).data.unit == request.resource.data.unit;
+        allow update: if purchasesEditor() && validPurchaseItem() && resource.data.receivedMilli == 0 &&
+          request.resource.data.receivedMilli == resource.data.quantityMilli && request.resource.data.receivedAt == request.time &&
+          request.resource.data.receivedBy == request.auth.uid &&
+          request.resource.data.diff(resource.data).affectedKeys().hasOnly(['receivedMilli', 'receivedAt', 'receivedBy']) &&
+          getAfter(/databases/$(database)/documents/places/$(placeId)/purchaseOrders/$(resource.data.purchaseOrderId)).data.status == 'received';
+        allow delete: if false;
+      }
+      match /checkins/{uid} {
+        function canRecord(source) {
+          return active() && (source == 'staff'
+            ? placeAccess(placeId, ['owner', 'manager', 'employee'])
+            : request.auth.uid == uid && (source in ['manual', 'qr'] ||
+              (source == 'geofence' && profile().get('autoCheckinConsentEnabled', false) == true)));
+        }
+        function validPresence() {
+          let d = request.resource.data;
+          return d.keys().hasOnly(['userId', 'placeId', 'source', 'sources', 'checkedInAt', 'checkedOutAt']) &&
+            d.userId == uid && d.placeId == placeId &&
+            d.source in ['manual', 'qr', 'geofence', 'staff'] &&
+            d.sources is list && d.sources.size() > 0 && d.sources.size() <= 4 &&
+            d.sources.toSet().size() == d.sources.size() &&
+            d.sources.hasOnly(['manual', 'qr', 'geofence', 'staff']) && d.source in d.sources &&
+            d.checkedInAt is timestamp && (d.checkedOutAt == null || d.checkedOutAt is timestamp);
+        }
+        allow get: if active() && (request.auth.uid == uid || placeAccess(placeId, ['owner', 'manager', 'employee']));
+        allow create: if validPresence() && canRecord(request.resource.data.source) &&
+          exists(/databases/$(database)/documents/places/$(placeId)) &&
+          get(/databases/$(database)/documents/users/$(uid)).data.get('active', true) == true &&
+          request.resource.data.sources == [request.resource.data.source] && request.resource.data.checkedInAt == request.time &&
+          request.resource.data.checkedOutAt == null;
+        allow update: if validPresence() && (
+          (resource.data.checkedOutAt == null && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['sources']) &&
+            request.resource.data.sources.hasAll(resource.data.sources) &&
+            request.resource.data.sources.toSet().difference(resource.data.sources.toSet()).size() == 1 &&
+            ((request.resource.data.sources.toSet().difference(resource.data.sources.toSet()).hasOnly(['manual']) && canRecord('manual')) ||
+             (request.resource.data.sources.toSet().difference(resource.data.sources.toSet()).hasOnly(['qr']) && canRecord('qr')) ||
+             (request.resource.data.sources.toSet().difference(resource.data.sources.toSet()).hasOnly(['geofence']) && canRecord('geofence')) ||
+             (request.resource.data.sources.toSet().difference(resource.data.sources.toSet()).hasOnly(['staff']) && canRecord('staff')))) ||
+          (resource.data.checkedOutAt == null && canRecord('geofence') && 'geofence' in resource.data.sources &&
+            request.resource.data.diff(resource.data).affectedKeys().hasOnly(['checkedOutAt']) && request.resource.data.checkedOutAt == request.time) ||
+          (resource.data.checkedOutAt is timestamp && canRecord('geofence') && request.time > resource.data.checkedOutAt + duration.value(30, 'm') &&
+            request.resource.data.diff(resource.data).affectedKeys().hasOnly(['source', 'sources', 'checkedInAt', 'checkedOutAt']) &&
+            request.resource.data.source == 'geofence' && request.resource.data.sources == ['geofence'] &&
+            request.resource.data.checkedInAt == request.time && request.resource.data.checkedOutAt == null)
+        );
+        allow delete: if false;
+      }
+      match /customerContexts/{uid} {
+        function validContext() {
+          let d = request.resource.data;
+          let session = getAfter(/databases/$(database)/documents/places/$(placeId)/serviceSessions/$(d.serviceSessionId)).data;
+          let checkin = getAfter(/databases/$(database)/documents/places/$(placeId)/checkins/$(uid)).data;
+          return d.keys().hasOnly(['userId', 'placeId', 'serviceSessionId', 'tableId', 'source', 'updatedAt']) &&
+            d.userId == uid && d.placeId == placeId && d.serviceSessionId is string && d.source == 'qr' &&
+            (d.tableId == null || d.tableId is string) && d.updatedAt == request.time &&
+            session.placeId == placeId && session.status == 'open' && session.tableId == d.tableId &&
+            checkin.userId == uid && checkin.placeId == placeId && checkin.checkedOutAt == null && 'qr' in checkin.sources;
+        }
+        allow get: if active() && request.auth.uid == uid;
+        allow create, update: if active() && request.auth.uid == uid && validContext();
+        allow list, delete: if false;
+      }
+      function importingMenu() { return get(/databases/$(database)/documents/places/$(placeId)).data.get('menuSchemaVersion', 1) != 2 && getAfter(/databases/$(database)/documents/places/$(placeId)).data.menuSchemaVersion == 2; }
+      function menuReady() { return getAfter(/databases/$(database)/documents/places/$(placeId)).data.menuSchemaVersion == 2; }
+      function usageDelta(categoryId, itemId, delta) {
+        let path = /databases/$(database)/documents/places/$(placeId)/menuCategoryUsage/$(categoryId);
+        return getAfter(path).data.count == get(path).data.count + delta && getAfter(path).data.itemId == itemId;
+      }
+      match /menuCategories/{categoryId} {
+        function validCategory() {
+          let d = request.resource.data;
+          return d.keys().hasOnly(['id','name','description','order','active','createdAt','updatedAt']) && d.id == categoryId &&
+            d.name is string && d.name.size() > 0 && d.name.size() <= 100 && d.description is string && d.description.size() <= 2000 &&
+            d.order is int && d.order >= 0 && d.order <= 9007199254740991 && d.active is bool && d.createdAt is timestamp && d.updatedAt == request.time;
+        }
+        allow read: if resource.data.active == true || placeAccess(placeId, ['owner','manager','employee']);
+        allow create: if menuEditor() && menuReady() && validCategory() && request.resource.data.createdAt == request.time &&
+          (importingMenu() || getAfter(/databases/$(database)/documents/places/$(placeId)/menuCategoryUsage/$(categoryId)).data.count == 0);
+        allow update: if menuEditor() && validCategory() && request.resource.data.createdAt == resource.data.createdAt;
+        allow delete: if menuEditor() && get(/databases/$(database)/documents/places/$(placeId)/menuCategoryUsage/$(categoryId)).data.count == 0;
+      }
+      match /menuItems/{itemId} {
+        function validItem() {
+          let d = request.resource.data;
+          return d.keys().hasOnly(['id','categoryId','name','description','price','imageUrl','active','available','order','createdAt','updatedAt']) &&
+            d.id == itemId && d.categoryId is string && existsAfter(/databases/$(database)/documents/places/$(placeId)/menuCategories/$(d.categoryId)) &&
+            d.name is string && d.name.size() > 0 && d.name.size() <= 100 && d.description is string && d.description.size() <= 2000 &&
+            d.price is number && d.price >= 0 && d.price <= 999999.99 && math.abs(d.price * 100 - math.round(d.price * 100)) < 0.000001 &&
+            d.imageUrl is string && d.imageUrl.size() <= 250000 && (d.imageUrl == '' || d.imageUrl.matches('https://.*') || d.imageUrl.matches('data:image/(jpeg|png|webp);base64,.*')) &&
+            d.active is bool && d.available is bool && d.order is int && d.order >= 0 && d.order <= 9007199254740991 && d.createdAt is timestamp && d.updatedAt == request.time;
+        }
+        allow read: if resource.data.active == true || placeAccess(placeId, ['owner','manager','employee']);
+        allow create: if menuEditor() && menuReady() && validItem() && request.resource.data.createdAt == request.time &&
+          (importingMenu() || usageDelta(request.resource.data.categoryId, itemId, 1));
+        allow update: if menuEditor() && validItem() && request.resource.data.createdAt == resource.data.createdAt &&
+          (request.resource.data.categoryId == resource.data.categoryId ||
+           (usageDelta(resource.data.categoryId, itemId, -1) && usageDelta(request.resource.data.categoryId, itemId, 1)));
+        allow delete: if menuEditor() && usageDelta(resource.data.categoryId, itemId, -1);
+      }
+      match /menuCategoryUsage/{categoryId} {
+        function validUsage() {
+          let d = request.resource.data;
+          return d.keys().hasOnly(['count','itemId','imported']) && d.count is int && d.count >= 0 && d.itemId is string && d.imported is bool;
+        }
+        function itemChanged() {
+          let d = request.resource.data;
+          let path = /databases/$(database)/documents/places/$(placeId)/menuItems/$(d.itemId);
+          return !d.imported && ((d.count == resource.data.count + 1 && (!exists(path) || get(path).data.categoryId != categoryId) && getAfter(path).data.categoryId == categoryId) ||
+            (d.count == resource.data.count - 1 && get(path).data.categoryId == categoryId && (!existsAfter(path) || getAfter(path).data.categoryId != categoryId)));
+        }
+        allow read: if placeAccess(placeId, ['owner','manager','employee']);
+        allow create: if menuEditor() && validUsage() && existsAfter(/databases/$(database)/documents/places/$(placeId)/menuCategories/$(categoryId)) &&
+          (importingMenu() || (request.resource.data.count == 0 && !request.resource.data.imported && !exists(/databases/$(database)/documents/places/$(placeId)/menuCategories/$(categoryId))));
+        allow update: if menuEditor() && validUsage() && itemChanged();
+        allow delete: if menuEditor() && resource.data.count == 0 && !existsAfter(/databases/$(database)/documents/places/$(placeId)/menuCategories/$(categoryId));
+      }
+      match /settings/modules {
+        function validModules() {
+          let enabled = request.resource.data.enabled;
+          return request.resource.data.keys().hasOnly(['schemaVersion', 'enabled', 'updatedAt', 'updatedBy']) &&
+            request.resource.data.schemaVersion == 1 && enabled is map &&
+            enabled.keys().hasOnly(['events', 'tables', 'serviceSessions', 'menu', 'orders', 'inventory', 'purchases', 'notifications', 'analytics', 'heatmap', 'team']) &&
+            enabled.events == true && enabled.team == true &&
+            enabled.tables is bool && enabled.serviceSessions is bool && enabled.menu is bool &&
+            enabled.orders is bool && enabled.inventory is bool && enabled.purchases is bool &&
+            enabled.notifications is bool && enabled.analytics is bool && enabled.heatmap is bool &&
+            (!enabled.tables || paidEntitled(placeId, 'tables')) &&
+            (!enabled.orders || paidEntitled(placeId, 'orders')) &&
+            (!enabled.inventory || paidEntitled(placeId, 'inventory')) &&
+            (!enabled.purchases || paidEntitled(placeId, 'purchases')) &&
+            (!enabled.notifications || paidEntitled(placeId, 'notifications')) &&
+            (!enabled.analytics || paidEntitled(placeId, 'advancedAnalytics')) &&
+            (!enabled.heatmap || paidEntitled(placeId, 'advancedAnalytics')) &&
+            request.resource.data.updatedAt == request.time && request.resource.data.updatedBy == request.auth.uid;
+        }
+        allow get: if placeAccess(placeId, ['owner', 'manager', 'employee']);
+        allow create, update: if exists(/databases/$(database)/documents/places/$(placeId)) && placeAccess(placeId, ['owner']) && validModules();
+        allow delete: if false;
+      }
+      // No deletion/ownership-transfer flow exists in the application.
+      match /orders/{orderId} {
+        function creationEnabled() {
+          let modules = get(/databases/$(database)/documents/places/$(placeId)/settings/modules).data;
+          return modules.schemaVersion == 1 && modules.enabled.get('orders', false) == true &&
+            modules.enabled.get('serviceSessions', false) == true && modules.enabled.get('menu', true) == true;
+        }
+        function validLine(line) {
+          let product = get(/databases/$(database)/documents/places/$(placeId)/menuItems/$(line.menuItemId)).data;
+          let quantity = line.quantity;
+          return product.active == true && product.available == true &&
+            quantity is int && quantity >= 1 && quantity <= 999 &&
+            line.keys().hasOnly(['menuItemId', 'name', 'quantity', 'unitPrice', 'total']) &&
+            line.name == product.name && line.unitPrice == product.price &&
+            line.total == math.round(product.price * 100) * quantity / 100.0;
+        }
+        function lineValidAt(index) {
+          return request.resource.data.items.size() <= index || validLine(request.resource.data.items[index]);
+        }
+        function centsAt(index) {
+          return request.resource.data.items.size() <= index ? 0 : math.round(request.resource.data.items[index].unitPrice * 100) * request.resource.data.items[index].quantity;
+        }
+        function validOrder() {
+          let d = request.resource.data;
+          let session = getAfter(/databases/$(database)/documents/places/$(placeId)/serviceSessions/$(d.serviceSessionId)).data;
+          return d.keys().hasOnly(['id', 'placeId', 'serviceSessionId', 'tableId', 'customerUid', 'serviceType', 'status', 'items', 'subtotal', 'total', 'notes', 'createdAt', 'updatedAt']) &&
+            d.id == orderId && d.placeId == placeId && d.serviceSessionId is string &&
+            session.placeId == placeId && session.status == 'open' &&
+            d.tableId == session.tableId && d.serviceType == session.serviceType &&
+            d.serviceType in ['table', 'counter', 'lounge', 'takeaway'] &&
+            (d.serviceType == 'table' ? d.tableId is string && d.tableId.size() > 0 : d.tableId == null) &&
+            (d.customerUid == null || (d.customerUid is string && d.customerUid.size() > 0 && d.customerUid.size() <= 1500)) &&
+            d.status == 'pending' && d.notes is string && d.notes.size() <= 2000 &&
+            d.createdAt == request.time && d.updatedAt == request.time &&
+            d.items is list && d.items.size() >= 1 && d.items.size() <= 5 &&
+            lineValidAt(0) && lineValidAt(1) && lineValidAt(2) && lineValidAt(3) && lineValidAt(4) &&
+            d.subtotal == (centsAt(0) + centsAt(1) + centsAt(2) + centsAt(3) + centsAt(4)) / 100.0 &&
+            d.total == d.subtotal;
+        }
+        function validTransition() {
+          let before = resource.data.status;
+          let after = request.resource.data.status;
+          return (after == 'cancelled' && before in ['pending', 'accepted', 'preparing', 'ready']) ||
+            (before == 'pending' && after == 'accepted') || (before == 'accepted' && after == 'preparing') ||
+            (before == 'preparing' && after == 'ready') || (before == 'ready' && after == 'delivered');
+        }
+        allow read: if (placeAccess(placeId, ['owner', 'manager', 'employee']) && ordersEnabled(placeId)) ||
+          (active() && resource.data.customerUid == request.auth.uid);
+        // menuItems can only be created through the prepared menu rules above.
+        allow create: if creationEnabled() && validOrder() &&
+          (placeAccess(placeId, ['owner', 'manager']) ||
+            (active() && request.resource.data.customerUid == request.auth.uid &&
+             getAfter(/databases/$(database)/documents/places/$(placeId)/customerContexts/$(request.auth.uid)).data.serviceSessionId == request.resource.data.serviceSessionId &&
+             getAfter(/databases/$(database)/documents/places/$(placeId)/customerContexts/$(request.auth.uid)).data.tableId == request.resource.data.tableId));
+        allow update: if placeAccess(placeId, ['owner', 'manager']) && ordersEnabled(placeId) &&
+          request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'updatedAt']) &&
+          request.resource.data.updatedAt == request.time && validTransition() &&
+          (request.resource.data.status != 'cancelled' ||
+            getAfter(/databases/$(database)/documents/places/$(placeId)/serviceSessions/$(resource.data.serviceSessionId)).data.status == 'open');
+        allow delete: if false;
+      }
+      match /settings/entitlements {
+        allow get: if placeAccess(placeId, ['owner', 'manager', 'employee']);
+        // Admin SDK bypasses rules. Browsers cannot grant or alter paid access.
+        allow create, update, delete: if false;
+      }
+      match /serviceSessions/{sessionId} {
+        function lockedForSession() {
+          let tableId = request.resource.data.tableId;
+          let path = /databases/$(database)/documents/places/$(placeId)/tableOccupancies/$(tableId);
+          return tableId == null || (!exists(path) && getAfter(path).data.sessionId == sessionId);
+        }
+        function releasedTable() {
+          let tableId = resource.data.tableId;
+          let path = /databases/$(database)/documents/places/$(placeId)/tableOccupancies/$(tableId);
+          return tableId == null || (!existsAfter(path) && (!exists(path) || get(path).data.sessionId == sessionId));
+        }
+        function validSession() {
+          let data = request.resource.data;
+          return data.keys().hasOnly(['id', 'placeId', 'tableId', 'serviceType', 'status', 'customerCount', 'openedAt', 'closedAt', 'openedBy', 'closedBy', 'source', 'createdAt', 'updatedAt']) &&
+            data.id == sessionId && data.placeId == placeId &&
+            data.serviceType in ['table', 'counter', 'lounge', 'takeaway'] &&
+            (data.serviceType == 'table' ? data.tableId is string && data.tableId.size() > 0 : data.tableId == null) &&
+            data.customerCount is int && data.customerCount > 0 && data.customerCount <= 9007199254740991 &&
+            data.openedAt is timestamp && data.createdAt is timestamp && data.updatedAt == request.time;
+        }
+        function validOpeningTable() {
+          let data = request.resource.data;
+          return data.tableId == null || (tablesEnabled(placeId) &&
+            exists(/databases/$(database)/documents/places/$(placeId)/tables/$(data.tableId)) &&
+            get(/databases/$(database)/documents/places/$(placeId)/tables/$(data.tableId)).data.active == true);
+        }
+        function customerQrSession() {
+          let d = request.resource.data;
+          let context = getAfter(/databases/$(database)/documents/places/$(placeId)/customerContexts/$(request.auth.uid)).data;
+          let checkin = getAfter(/databases/$(database)/documents/places/$(placeId)/checkins/$(request.auth.uid)).data;
+          let participant = getAfter(/databases/$(database)/documents/places/$(placeId)/serviceSessions/$(sessionId)/participants/$(request.auth.uid)).data;
+          return active() && d.source == 'customer_qr' && d.openedBy == request.auth.uid && d.customerCount == 1 &&
+            context.userId == request.auth.uid && context.serviceSessionId == sessionId && context.tableId == d.tableId &&
+            checkin.userId == request.auth.uid && 'qr' in checkin.sources &&
+            participant.userId == request.auth.uid && participant.serviceSessionId == sessionId;
+        }
+        allow read: if (placeAccess(placeId, ['owner', 'manager', 'employee']) && sessionsEnabled(placeId)) ||
+          (active() && get(/databases/$(database)/documents/places/$(placeId)/customerContexts/$(request.auth.uid)).data.serviceSessionId == sessionId);
+        allow create: if exists(/databases/$(database)/documents/places/$(placeId)) &&
+          sessionsEnabled(placeId) && validSession() && validOpeningTable() && lockedForSession() &&
+          request.resource.data.status == 'open' && request.resource.data.openedBy == request.auth.uid &&
+          request.resource.data.openedAt == request.time && request.resource.data.createdAt == request.time &&
+          request.resource.data.closedAt == null && request.resource.data.closedBy == null &&
+          ((placeAccess(placeId, ['owner', 'manager']) && request.resource.data.source == 'partner_web') || customerQrSession());
+        allow update: if placeAccess(placeId, ['owner', 'manager']) && sessionsEnabled(placeId) && validSession() &&
+          resource.data.status == 'open' && request.resource.data.status in ['closed', 'cancelled'] && releasedTable() &&
+          request.resource.data.closedAt == request.time && request.resource.data.closedBy == request.auth.uid &&
+          request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'closedAt', 'closedBy', 'updatedAt']);
+        allow delete: if false;
+        match /participants/{uid} {
+          function validParticipant() {
+            let d = request.resource.data;
+            let session = getAfter(/databases/$(database)/documents/places/$(placeId)/serviceSessions/$(sessionId)).data;
+            let context = getAfter(/databases/$(database)/documents/places/$(placeId)/customerContexts/$(uid)).data;
+            return d.keys().hasOnly(['userId', 'placeId', 'serviceSessionId', 'source', 'joinedAt', 'leftAt']) &&
+              d.userId == uid && d.placeId == placeId && d.serviceSessionId == sessionId &&
+              d.source == 'customer_qr' && d.joinedAt == request.time && d.leftAt == null &&
+              session.placeId == placeId && session.status == 'open' &&
+              context.userId == uid && context.serviceSessionId == sessionId;
+          }
+          allow read: if (placeAccess(placeId, ['owner', 'manager', 'employee']) && sessionsEnabled(placeId)) ||
+            (active() && request.auth.uid == uid);
+          allow create: if active() && request.auth.uid == uid && sessionsEnabled(placeId) && validParticipant();
+          allow update, delete: if false;
+        }
+      }
+      match /tableOccupancies/{tableId} {
+        allow get: if active() && sessionsEnabled(placeId);
+        allow list: if placeAccess(placeId, ['owner', 'manager', 'employee']) && sessionsEnabled(placeId);
+        allow create: if active() && sessionsEnabled(placeId) &&
+          request.resource.data.keys().hasOnly(['sessionId']) && request.resource.data.sessionId is string &&
+          !exists(/databases/$(database)/documents/places/$(placeId)/serviceSessions/$(request.resource.data.sessionId)) &&
+          getAfter(/databases/$(database)/documents/places/$(placeId)/serviceSessions/$(request.resource.data.sessionId)).data.tableId == tableId &&
+          getAfter(/databases/$(database)/documents/places/$(placeId)/serviceSessions/$(request.resource.data.sessionId)).data.status == 'open' &&
+          (placeAccess(placeId, ['owner', 'manager']) ||
+            getAfter(/databases/$(database)/documents/places/$(placeId)/customerContexts/$(request.auth.uid)).data.serviceSessionId == request.resource.data.sessionId);
+        allow update: if false;
+        allow delete: if placeAccess(placeId, ['owner', 'manager']) && sessionsEnabled(placeId) &&
+          get(/databases/$(database)/documents/places/$(placeId)/serviceSessions/$(resource.data.sessionId)).data.status == 'open' &&
+          getAfter(/databases/$(database)/documents/places/$(placeId)/serviceSessions/$(resource.data.sessionId)).data.status in ['closed', 'cancelled'];
+      }
+      match /tables/{tableId} {
+        function validTable() {
+          let data = request.resource.data;
+          return data.keys().hasOnly(['id', 'number', 'name', 'capacity', 'active', 'createdAt', 'updatedAt']) &&
+            data.id == tableId && data.number is int && data.number > 0 && data.number <= 9007199254740991 &&
+            data.name is string && data.name.size() > 0 && data.name.size() <= 100 &&
+            data.capacity is int && data.capacity > 0 && data.capacity <= 9007199254740991 &&
+            data.active is bool && data.createdAt is timestamp && data.updatedAt == request.time;
+        }
+        allow read: if (active() && resource.data.active == true && tablesEnabled(placeId)) ||
+          (placeAccess(placeId, ['owner', 'manager', 'employee']) && tablesEnabled(placeId));
+        allow create: if exists(/databases/$(database)/documents/places/$(placeId)) && placeAccess(placeId, ['owner', 'manager']) && tablesEnabled(placeId) && validTable() && request.resource.data.createdAt == request.time;
+        allow update: if placeAccess(placeId, ['owner', 'manager']) && tablesEnabled(placeId) && validTable() && request.resource.data.createdAt == resource.data.createdAt;
+        allow delete: if false;
+      }
+      match /members/{uid} {
+        function validMember() {
+          return request.resource.data.keys().hasOnly(['role', 'active', 'createdAt']) &&
+            request.resource.data.role in ['owner', 'manager', 'employee'] &&
+            request.resource.data.active is bool && request.resource.data.createdAt is timestamp &&
+            exists(/databases/$(database)/documents/users/$(uid));
+        }
+        function keepsOwner() {
+          return (referenceId(getAfter(/databases/$(database)/documents/places/$(placeId)).data.ownerId) != uid && request.auth.uid != uid) ||
+            (request.resource.data.role == 'owner' && request.resource.data.active == true);
+        }
+        function bootstrap() {
+          return canCreatePlace() && request.auth.uid == uid &&
+            !exists(/databases/$(database)/documents/places/$(placeId)) &&
+            getAfter(/databases/$(database)/documents/places/$(placeId)).data.ownerId == uid &&
+            request.resource.data.role == 'owner' && request.resource.data.active == true;
+        }
+        allow get: if active() && (request.auth.uid == uid || placeAccess(placeId, ['owner']));
+        allow list: if placeAccess(placeId, ['owner']);
+        allow create: if validMember() && keepsOwner() && request.resource.data.createdAt == request.time &&
+          (bootstrap() || placeAccess(placeId, ['owner']));
+        allow update: if placeAccess(placeId, ['owner']) && validMember() && keepsOwner() &&
+          request.resource.data.createdAt == resource.data.createdAt;
+        // Retain inactive documents so legacy fallback cannot resurrect revoked access.
+        allow delete: if false;
+      }
+    }
+
+    match /events/{eventId} {
+      function unchangedMetrics() {
+        return request.resource.data.get('boraCount', 0) == resource.data.get('boraCount', 0) &&
+          request.resource.data.get('checkinCount', 0) == resource.data.get('checkinCount', 0) &&
+          request.resource.data.get('views', 0) == resource.data.get('views', 0) &&
+          request.resource.data.get('shares', 0) == resource.data.get('shares', 0);
+      }
+      function metric(field) {
+        return request.resource.data.diff(resource.data).affectedKeys().hasOnly([field]) &&
+          request.resource.data[field] == resource.data.get(field, 0) + 1;
+      }
+      function boraCounter() {
+        let path = /databases/$(database)/documents/events/$(eventId)/boras/$(request.auth.uid);
+        let before = resource.data.get('boraCount', 0);
+        return active() && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['boraCount']) && (
+          (!exists(path) && existsAfter(path) && request.resource.data.boraCount == before + 1) ||
+          (exists(path) && !existsAfter(path) && request.resource.data.boraCount == (before > 0 ? before - 1 : 0)));
+      }
+      function checkinCounter() {
+        let path = /databases/$(database)/documents/events/$(eventId)/checkins/$(request.auth.uid);
+        return active() && metric('checkinCount') && !exists(path) && existsAfter(path);
+      }
+      function editEvent() {
+        let changed = request.resource.data.diff(resource.data).affectedKeys();
+        let sameAuthor = referenceId(request.resource.data.createdBy) == referenceId(resource.data.createdBy);
+        return sameAuthor
+          ? eventAccess(resource.data, false) && unchangedMetrics() &&
+            request.resource.data.get('createdAt', null) == resource.data.get('createdAt', null) &&
+            (request.resource.data.get('placeId', null) == resource.data.get('placeId', null) || validLink(request.resource.data))
+          : changed.hasOnly(['createdBy', 'updatedAt']) && eventAccess(resource.data, true) &&
+            request.resource.data.createdBy is string && exists(/databases/$(database)/documents/users/$(request.resource.data.createdBy));
+      }
+      function updateEvent() {
+        let changed = request.resource.data.diff(resource.data).affectedKeys();
+        return changed.hasOnly(['views']) ? metric('views') :
+          changed.hasOnly(['shares']) ? metric('shares') :
+          changed.hasOnly(['boraCount']) ? boraCounter() :
+          changed.hasOnly(['checkinCount']) ? checkinCounter() : editEvent();
+      }
+      allow read: if true;
+      allow create: if active() && request.resource.data.createdBy == request.auth.uid && validLink(request.resource.data) &&
+        request.resource.data.get('boraCount', 0) == 0 && request.resource.data.get('checkinCount', 0) == 0 &&
+        request.resource.data.get('views', 0) == 0 && request.resource.data.get('shares', 0) == 0;
+      allow update: if updateEvent();
+      match /boras/{uid} {
+        allow get: if active() && request.auth.uid == uid;
+        allow create: if active() && request.auth.uid == uid && request.resource.data.user.id == uid && request.resource.data.eventId == eventId &&
+          request.resource.data.createdAt == request.time &&
+          getAfter(/databases/$(database)/documents/events/$(eventId)).data.boraCount == get(/databases/$(database)/documents/events/$(eventId)).data.get('boraCount', 0) + 1;
+        allow delete: if active() && request.auth.uid == uid &&
+          getAfter(/databases/$(database)/documents/events/$(eventId)).data.boraCount ==
+            (get(/databases/$(database)/documents/events/$(eventId)).data.get('boraCount', 0) > 0 ? get(/databases/$(database)/documents/events/$(eventId)).data.boraCount - 1 : 0);
+      }
+      match /checkins/{uid} {
+        allow get: if active() && request.auth.uid == uid;
+        allow create: if active() && request.auth.uid == uid && request.resource.data.user.id == uid && request.resource.data.eventId == eventId &&
+          request.resource.data.get('userId', uid) == uid &&
+          request.resource.data.get('placeId', get(/databases/$(database)/documents/events/$(eventId)).data.get('placeId', null)) == get(/databases/$(database)/documents/events/$(eventId)).data.get('placeId', null) &&
+          request.resource.data.get('source', 'manual') == 'manual' && request.resource.data.get('sources', ['manual']) == ['manual'] &&
+          request.resource.data.get('checkedOutAt', null) == null &&
+          request.resource.data.checkedInAt == request.time && request.resource.data.latitude is number && request.resource.data.longitude is number &&
+          get(/databases/$(database)/documents/events/$(eventId)).data.status == 'published' &&
+          request.time >= get(/databases/$(database)/documents/events/$(eventId)).data.startDate &&
+          request.time <= get(/databases/$(database)/documents/events/$(eventId)).data.endDate &&
+          getAfter(/databases/$(database)/documents/events/$(eventId)).data.checkinCount == get(/databases/$(database)/documents/events/$(eventId)).data.get('checkinCount', 0) + 1;
+      }
+    }
+    match /{path=**}/boras/{uid} {
+      allow list: if active() && resource.data.user.id == request.auth.uid;
+    }
+    match /{path=**}/checkins/{uid} {
+      allow list: if active() && resource.data.user.id == request.auth.uid;
+    }
+  }
+}

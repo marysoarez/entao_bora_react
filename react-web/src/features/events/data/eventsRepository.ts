@@ -18,3 +18,4 @@ export const checkIntoEvent = checkIn;
 export const incrementEventMetric = count;
 export const transferEventOwnership = transferEvent;
 export const subscribeToEventInteractions = watchInteractions;
+export { getEventPresenceContexts } from "../../../core/eventPresenceService";

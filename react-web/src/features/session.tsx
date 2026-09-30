@@ -114,6 +114,11 @@ export function SessionProvider({ children }: { children: ReactNode }) {
           active: true,
           partnerId: null,
           notificationsEnabled: false,
+          notificationPreferences: {
+            events: true,
+            orders: true,
+            marketing: false,
+          },
           locationSharingEnabled: false,
         });
     });

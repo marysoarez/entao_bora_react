@@ -83,7 +83,7 @@ describe("check-in", () => {
     expect(canCheckIn({ ...e, status: "cancelled" }, position(0), start)).toBe(
       false,
     ));
-  it("não aceita datas iguais no cadastro", () =>
+  it("aceita datas iguais no cadastro como no Flutter", () =>
     expect(() =>
       validateEvent({
         ...e,
@@ -93,7 +93,7 @@ describe("check-in", () => {
         coverImage: "https://example.com/a.jpg",
         endDate: start,
       }),
-    ).toThrow("posterior"));
+    ).not.toThrow());
 });
 describe("políticas de acesso", () => {
   it("admin não é parceiro automaticamente", () =>

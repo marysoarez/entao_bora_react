@@ -1,3 +1,14 @@
+import {
+  PartnerAccessProvider,
+  usePartnerAccess,
+} from "../features/partner-access/PartnerAccess";
+import { TablesManagementPage } from "../features/tables/pages/TablesManagementPage";
+import { ServiceSessionsPage } from "../features/service-sessions/pages/ServiceSessionsPage";
+import { OrdersPage } from "../features/orders/pages/OrdersPage";
+import { InventoryPage } from "../features/inventory/InventoryPage";
+import { PurchasesPage } from "../features/purchases/PurchasesPage";
+import { NotificationsPage } from "../features/notifications/NotificationsPage";
+import { QrCheckInPage } from "../features/qr/pages/QrCheckInPage";
 import { useEffect, useState, type ReactNode } from "react";
 import {
   BrowserRouter,
@@ -18,13 +29,15 @@ import {
   UserRound,
   LogOut,
   SlidersHorizontal,
+  Ghost,
+  Sparkles,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { SessionProvider, useSession } from "../features/session";
 import { configured } from "../core/firebase";
 import { watchPublic } from "../core/repository";
-import { isPartner, locate } from "../shared/domain";
+import { locate } from "../shared/domain";
 import { genres, type Event, type Place } from "../shared/models";
 import { MapView } from "../features/MapView";
 import { registerSearchTool } from "../shared/webmcp";
@@ -43,6 +56,7 @@ import {
 import { PartnerDashboardPage } from "../features/partner-dashboard/PartnerDashboardPage";
 import { UserArea } from "../features/user-area/UserArea";
 import { Message } from "../shared/ui/Message";
+import { PrivacyPolicyPage } from "../features/privacy/PrivacyPolicyPage";
 function Home() {
   const [places, setPlaces] = useState<Place[]>([]),
     [events, setEvents] = useState<Event[]>([]),
@@ -101,6 +115,10 @@ function Home() {
     <>
       <div className="page-heading">
         <div>
+          <div className="halloween-doodles" aria-hidden="true">
+            <Ghost />
+            <Sparkles />
+          </div>
           <span className="eyebrow">
             <span className="live-dot" /> A CIDADE ESTÁ NO RITMO
           </span>
@@ -285,6 +303,7 @@ function Guard({
   children: ReactNode;
 }) {
   const { user, loading, login } = useSession();
+  const access = usePartnerAccess();
   const [error, setError] = useState("");
   if (loading) return <Message>Restaurando sua sessão…</Message>;
   if (!user)
@@ -299,16 +318,20 @@ function Guard({
         {error && <Message>{error}</Message>}
       </div>
     );
-  if (!user.active || (partner && !isPartner(user)))
+  if (partner && access.loading)
+    return <Message>Carregando permiss?es?</Message>;
+  if (partner && access.error) return <Message>{access.error}</Message>;
+  if (!user.active || (partner && !access.canEnter))
     return (
       <Message>
         Esta área está disponível para{" "}
-        {partner ? "parceiros ativos" : "contas ativas"}.
+        {partner ? "membros ativos de estabelecimentos" : "contas ativas"}.
       </Message>
     );
   return children;
 }
 function Shell() {
+  const access = usePartnerAccess();
   const { user, login, logout, error: sessionError } = useSession(),
     [error, setError] = useState("");
   const location = useLocation();
@@ -341,8 +364,8 @@ function Shell() {
             <UserRound size={17} />
             Minha área
           </NavLink>
-          {isPartner(user) && (
-            <NavLink to="/partner-dashboard">Painel do parceiro</NavLink>
+          {access.canEnter && (
+            <NavLink to="/partner-dashboard">Gestão do estabelecimento</NavLink>
           )}
         </nav>
         <Button
@@ -366,9 +389,26 @@ function Shell() {
         </Button>
       </header>
       <main className="container">
+        {location.state?.eventSuccess && (
+          <div role="status">
+            <Message>{location.state.eventSuccess}</Message>
+          </div>
+        )}
         {(error || sessionError) && <Message>{error || sessionError}</Message>}
         <Routes>
           <Route path="/" element={<Home />} />
+          <Route
+            path="/checkin/:slug"
+            element={
+              <Guard>
+                <QrCheckInPage />
+              </Guard>
+            }
+          />
+          <Route
+            path="/politica-de-privacidade"
+            element={<PrivacyPolicyPage />}
+          />
           <Route
             path="/events/create"
             element={
@@ -406,6 +446,54 @@ function Shell() {
             element={
               <Guard partner>
                 <PlacesManagementPage />
+              </Guard>
+            }
+          />
+          <Route
+            path="/places/orders"
+            element={
+              <Guard partner>
+                <OrdersPage />
+              </Guard>
+            }
+          />
+          <Route
+            path="/places/inventory"
+            element={
+              <Guard partner>
+                <InventoryPage />
+              </Guard>
+            }
+          />
+          <Route
+            path="/places/purchases"
+            element={
+              <Guard partner>
+                <PurchasesPage />
+              </Guard>
+            }
+          />
+          <Route
+            path="/places/notifications"
+            element={
+              <Guard partner>
+                <NotificationsPage />
+              </Guard>
+            }
+          />
+          <Route
+            path="/places/service-sessions"
+            element={
+              <Guard partner>
+                <ServiceSessionsPage />
+              </Guard>
+            }
+          />
+          <Route
+            path="/places/tables"
+            element={
+              <Guard partner>
+                <TablesManagementPage />
               </Guard>
             }
           />
@@ -461,6 +549,9 @@ function Shell() {
         </Link>
         <span>A vida acontece lá fora. Bora?</span>
         <small>Rio de Janeiro · Música e encontros</small>
+        <Link className="privacy-footer-link" to="/politica-de-privacidade">
+          Política de Privacidade
+        </Link>
       </footer>
     </>
   );
@@ -469,7 +560,9 @@ export default function App() {
   return (
     <BrowserRouter>
       <SessionProvider>
-        <Shell />
+        <PartnerAccessProvider>
+          <Shell />
+        </PartnerAccessProvider>
       </SessionProvider>
     </BrowserRouter>
   );

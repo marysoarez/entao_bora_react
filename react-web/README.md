@@ -1,6 +1,16 @@
 # Então Bora — React Web
 
+O catálogo e a configuração de módulos do estabelecimento estão documentados em [Etapa 2 — módulos](docs/place-modules.md). Eventos existentes permanecem disponíveis, sem assinatura, e os demais módulos futuros são apresentados como planejados.
+
+A autorização por membros de estabelecimento está documentada em [Etapa 1 — membros e permissões](docs/place-memberships.md), incluindo matriz, compatibilidade, testes e estado das Rules locais. Essa descrição substitui as observações históricas abaixo sobre acesso exclusivamente por parceiro e ausência de Rules versionadas.
+
 Migração React + TypeScript, Vite e Firebase Web. A aplicação está em `react-web/`; o projeto Flutter vizinho foi usado somente como referência de leitura. Nenhum dado ou configuração de produção foi alterado.
+
+## Referência visual
+
+O [guia da página inicial para alinhamento com Flutter](docs/home-ui-flutter.md) documenta a composição atual, cores, tipografia, medidas, responsividade, cards, mapa e estados da interface React.
+
+O [guia de mapa, ícone temático e calor de Boras para Flutter](docs/mapa-flutter.md) detalha o SVG original, agrupamento e navegação, câmera, cores, algoritmo de calor, estados e critérios de paridade.
 
 ## Organização por feature
 
@@ -65,3 +75,37 @@ Referências: [transações Firestore](https://firebase.google.com/docs/firestor
 ## Verifica??o local
 
 Build e 14 testes unit?rios aprovados. Servidor local respondeu HTTP 200. Auditoria de depend?ncias sem vulnerabilidades ap?s atualiza??o. N?o foi feita inspe??o visual em navegador nem execu??o contra Firebase real. WebMCP ? opcional e n?o foi validado em um contexto de navegador compat?vel. Os ?ndices anexos s?o propostas para revis?o, n?o c?pia dos ?ndices implantados.
+
+## Gestao de mesas (etapa 3)
+
+Consulte [modelo, permissoes e validacao das mesas](docs/place-tables.md).
+
+## Atendimentos (etapa 4)
+
+Consulte [ServiceSession: modelo, permissões e validação](docs/service-sessions.md).
+
+## Ocupação e histórico (etapa 5)
+
+Consulte [concorrência, histórico e cuidados de publicação](docs/table-occupancy.md).
+
+## Cardápio (etapa 6)
+
+Consulte [categorias, produtos, importação e compatibilidade](docs/place-menu.md).
+
+## Pedidos (etapa 7)
+
+Consulte [pedidos por atendimento, snapshots, status e atualização em tempo real](docs/place-orders.md).
+
+## Conta e fechamento (etapa 8)
+
+Consulte [soma dos pedidos, fechamento, concorrência e preservação do histórico](docs/session-accounts.md).
+
+## QR Code (etapa 9)
+
+Consulte [QR do estabelecimento e da mesa, contexto dinâmico, pedidos e segurança](docs/qr-checkin.md).
+
+Consulte [a separação entre check-in e jornada de consumo](docs/checkin-service-session.md).
+
+Consulte [participantes de uma jornada de consumo](docs/service-session-participants.md).
+
+Consulte [a preparação de domínio e Firebase para check-in automático futuro](docs/automatic-checkin-preparation.md).

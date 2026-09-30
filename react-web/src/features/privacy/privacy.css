@@ -1,0 +1,112 @@
+.privacy-page {
+  padding: 36px 0 64px;
+}
+.privacy-back {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: #bbb;
+}
+.privacy-heading {
+  margin: 32px 0;
+}
+.privacy-heading .eyebrow {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.privacy-heading h1 {
+  font-size: clamp(32px, 5vw, 52px);
+}
+.privacy-layout {
+  display: grid;
+  grid-template-columns: 260px minmax(0, 1fr);
+  gap: 48px;
+  align-items: start;
+}
+.privacy-index {
+  padding: 24px;
+  border: 1px solid #333;
+  border-radius: 12px;
+  background: #111;
+}
+.privacy-index h2 {
+  font-size: 18px;
+  margin-bottom: 16px;
+}
+.privacy-index ul {
+  display: grid;
+  gap: 12px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.privacy-index a {
+  display: block;
+  color: #bbb;
+  font-size: 14px;
+  line-height: 1.5;
+}
+.privacy-content {
+  max-width: 760px;
+  overflow-wrap: anywhere;
+}
+.privacy-content p,
+.privacy-content li {
+  color: #c4c4c4;
+  line-height: 1.8;
+}
+.privacy-content p {
+  margin: 0 0 18px;
+}
+.privacy-content h2 {
+  margin: 40px 0 18px;
+  scroll-margin-top: 24px;
+  line-height: 1.3;
+}
+.privacy-content h3 {
+  margin: 28px 0 14px;
+  line-height: 1.4;
+}
+.privacy-content ul {
+  list-style: disc;
+  padding-left: 24px;
+  margin: 16px 0 24px;
+}
+.privacy-content li + li {
+  margin-top: 6px;
+}
+.privacy-content strong {
+  color: var(--foreground);
+}
+.privacy-content hr {
+  border: 0;
+  border-top: 1px solid #333;
+  margin: 32px 0;
+}
+.privacy-content a,
+.privacy-footer-link {
+  text-decoration: underline;
+  text-underline-offset: 4px;
+}
+.privacy-footer-link {
+  font-size: 13px;
+  color: #bbb;
+}
+footer {
+  flex-wrap: wrap;
+  gap: 20px;
+}
+.privacy-page a:hover,
+.privacy-footer-link:hover {
+  color: var(--primary);
+}
+@media (max-width: 800px) {
+  .privacy-layout {
+    grid-template-columns: 1fr;
+    gap: 32px;
+  }
+  .privacy-page {
+    padding-top: 24px;
+  }
+}

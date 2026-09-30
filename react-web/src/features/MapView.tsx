@@ -1,7 +1,17 @@
 import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import type { Place, Event } from "../shared/models";
+import { boraHeatBands, boraHeatPoints, createBoraHeatmap } from "./boraHeatmap";
 let pending: Promise<any> | undefined;
+
+function halloweenMarkerIcon(maps: any) {
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="42" height="48" viewBox="0 0 42 48"><path fill="#101010" stroke="#ff8a3d" stroke-width="2" d="M21 47C17 40 5 31 5 19a16 16 0 1 1 32 0c0 12-12 21-16 28Z"/><path fill="#ff8a3d" d="M19 9c0-3 2-5 5-5-1 2-1 4 1 6l-6-1Z"/><path fill="#e86f24" d="M21 11c8 0 12 4 12 10s-4 11-12 11S9 27 9 21s4-10 12-10Z"/><path fill="#19130f" d="m15 18 4 3h-6l2-3Zm12 0 2 3h-6l4-3Zm-11 8h10l-2 3h-6l-2-3Z"/></svg>`;
+  return {
+    url: `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(svg)}`,
+    scaledSize: new maps.Size(42, 48),
+    labelOrigin: new maps.Point(21, 38),
+  };
+}
 export function loadMaps(): Promise<any> {
   if (pending) return pending;
   pending = new Promise((resolve, reject) => {
@@ -63,6 +73,7 @@ export function MapView({
     const markers: any[] = [];
     let map: any;
     let readyListener: any;
+    let heatmap: ReturnType<typeof createBoraHeatmap> | undefined;
     setError("");
     setLoading(true);
     loadMaps()
@@ -81,6 +92,7 @@ export function MapView({
         readyListener = m.event.addListenerOnce(map, "idle", () => {
           if (!cancelled) setLoading(false);
         });
+        heatmap = createBoraHeatmap(m, map, events);
         const groups = new Map<
           string,
           { lat: number; lng: number; items: { name: string; url: string }[] }
@@ -114,7 +126,13 @@ export function MapView({
             map,
             position: { lat: g.lat, lng: g.lng },
             title: g.items.map((x) => x.name).join(", "),
-            label: g.items.length > 1 ? String(g.items.length) : undefined,
+            icon: halloweenMarkerIcon(m),
+            label: g.items.length > 1 ? {
+              text: String(g.items.length),
+              color: "#fff",
+              fontSize: "11px",
+              fontWeight: "700",
+            } : undefined,
           });
           marker.addListener("click", () =>
             g.items.length === 1 ? navigate(g.items[0].url) : setGroup(g.items),
@@ -128,6 +146,7 @@ export function MapView({
     return () => {
       cancelled = true;
       markers.forEach((m) => m.setMap(null));
+      heatmap?.setMap(null);
       readyListener?.remove();
     };
   }, [places, events, position, navigate, attempt]);
@@ -135,6 +154,19 @@ export function MapView({
     <>
       <div className="map-frame" aria-busy={loading && !error}>
         <div className="map" ref={ref} aria-label="Mapa de locais e eventos" />
+        {!loading && !error && (
+          <div className="map-season-badge" aria-hidden="true">
+            <span>🎃</span> Mapa assombrado
+          </div>
+        )}
+        {!loading && !error && (
+          <div className="map-heat-legend">
+            <strong>Calor de Boras</strong>
+            {boraHeatPoints(events).length ? (
+              <div className="map-heat-bands">{boraHeatBands.map((band) => (<span key={band.min}><i style={{ background: `rgb(${band.color.join(",")})` }} />{band.label}</span>))}</div>
+            ) : <span>Sem Boras nos eventos filtrados</span>}
+          </div>
+        )}
         {loading && !error && <MapSkeleton />}
         {error && (
           <div className="map-feedback" role="alert">

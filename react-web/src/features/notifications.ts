@@ -1,11 +1,17 @@
 import { getMessaging, getToken, isSupported } from "firebase/messaging";
-import { doc, serverTimestamp, writeBatch } from "firebase/firestore";
+import {
+  doc,
+  serverTimestamp,
+  updateDoc,
+  writeBatch,
+} from "firebase/firestore";
 import {
   assertProductWritesEnabled,
   database,
   firebaseApp,
 } from "../core/firebase";
 import type { User } from "../shared/models";
+import type { NotificationPreferences } from "../shared/models";
 export const tokenId = (token: string) =>
   btoa(token).replace(/\+/g, "-").replace(/\//g, "_");
 export async function setNotifications(user: User, enabled: boolean) {
@@ -45,4 +51,15 @@ export async function setNotifications(user: User, enabled: boolean) {
       { merge: true },
     );
   await batch.commit();
+}
+
+export async function setNotificationPreferences(
+  user: User,
+  preferences: NotificationPreferences,
+) {
+  assertProductWritesEnabled("Atualização das preferências de notificação");
+  await updateDoc(doc(database(), "users", user.id), {
+    notificationPreferences: preferences,
+    notificationUpdatedAt: serverTimestamp(),
+  });
 }

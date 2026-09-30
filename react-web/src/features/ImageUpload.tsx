@@ -1,11 +1,23 @@
 import { useState } from "react";
-export function ImageUpload({ onImage }: { onImage: (image: string) => void }) {
+export function ImageUpload({
+  onImage,
+  rawBase64 = false,
+  maxLength = 250000,
+  onBusyChange,
+  label = "Ou enviar imagem",
+}: {
+  onImage: (image: string) => void;
+  rawBase64?: boolean;
+  maxLength?: number;
+  onBusyChange?: (busy: boolean) => void;
+  label?: string;
+}) {
   const [error, setError] = useState(""),
     [busy, setBusy] = useState(false);
   return (
     <div className="field">
       <label>
-        Ou enviar imagem{" "}
+        {label}{" "}
         <input
           type="file"
           accept="image/jpeg,image/png,image/webp"
@@ -14,6 +26,7 @@ export function ImageUpload({ onImage }: { onImage: (image: string) => void }) {
             const file = e.target.files?.[0];
             if (!file) return;
             setBusy(true);
+            onBusyChange?.(true);
             setError("");
             let url = "";
             try {
@@ -43,9 +56,10 @@ export function ImageUpload({ onImage }: { onImage: (image: string) => void }) {
               let result = "";
               for (let quality = 0.9; quality >= 0.19; quality -= 0.1) {
                 result = canvas.toDataURL("image/jpeg", quality);
-                if (result.length < 250000) break;
+                if (rawBase64) result = result.split(",")[1];
+                if (result.length < maxLength) break;
               }
-              if (result.length >= 250000)
+              if (result.length >= maxLength)
                 throw Error(
                   "A imagem continua muito grande. Escolha uma imagem menor.",
                 );
@@ -55,6 +69,7 @@ export function ImageUpload({ onImage }: { onImage: (image: string) => void }) {
             } finally {
               if (url) URL.revokeObjectURL(url);
               setBusy(false);
+              onBusyChange?.(false);
               e.target.value = "";
             }
           }}

@@ -6,6 +6,7 @@ import {
   type User,
   type Genre,
 } from "./models";
+import { isPlatformAdmin, legacyResponsible } from "./partnerPermissions";
 type Data = Record<string, any>;
 export const normalizeSlug = (s: string) =>
   s
@@ -37,6 +38,12 @@ export function parseUser(id: string, d: Data): User {
     active: d.active ?? true,
     isAnonymous: d.isAnonymous ?? false,
     notificationsEnabled: d.notificationsEnabled ?? false,
+    notificationPreferences: {
+      events: d.notificationPreferences?.events !== false,
+      orders: d.notificationPreferences?.orders !== false,
+      // Marketing always requires an explicit opt-in.
+      marketing: d.notificationPreferences?.marketing === true,
+    },
     locationSharingEnabled: d.locationSharingEnabled ?? false,
     lastKnownLocation:
       rawLocation &&
@@ -65,6 +72,7 @@ export function parsePlace(id: string, d: Data): Place {
     ownerId: referenceId(d.ownerId),
     musicGenres: music(d.musicGenres),
     openingHours: d.openingHours ?? [],
+    menuSchemaVersion: d.menuSchemaVersion ?? 1,
     menuItems: (d.menuItems ?? []).map((x: Data) => ({
       ...x,
       price: Number(x.price) || 0,
@@ -132,8 +140,7 @@ export function canCheckIn(
 export const isPartner = (u: User | null) =>
   !!u?.active && u.role === "partner";
 export const canManage = (u: User | null, owner: string) =>
-  !!u?.active &&
-  (owner === u.id || (isPartner(u) && !!u.partnerId && owner === u.partnerId));
+  isPlatformAdmin(u) || legacyResponsible(u, owner);
 export const imageSource = (s: string) =>
   !s
     ? ""
@@ -168,20 +175,29 @@ export const locate = () =>
       : reject(new Error("Localização indisponível.")),
   );
 export function validateEvent(e: Event) {
+  if (!e.title.trim()) throw Error("Informe o nome do evento.");
+  if (!e.description.trim()) throw Error("Informe uma descrição.");
+  if (!e.coverImage) throw Error("Adicione uma imagem de capa para o evento.");
   if (
-    !e.title.trim() ||
-    !e.description.trim() ||
-    !e.coverImage ||
-    !e.address.displayName ||
-    !e.slug
+    !e.address.displayName.trim() ||
+    !Number.isFinite(e.address.latitude) ||
+    !Number.isFinite(e.address.longitude) ||
+    Math.abs(e.address.latitude) > 90 ||
+    Math.abs(e.address.longitude) > 180
   )
-    throw Error("Preencha título, descrição, capa, endereço e slug.");
-  if (
-    !Number.isFinite(+e.startDate) ||
-    !Number.isFinite(+e.endDate) ||
-    e.endDate <= e.startDate
-  )
-    throw Error("O término deve ser posterior ao início.");
-  if (e.ticket.type === "external" && !safeUrl(e.ticket.ticketUrl))
-    throw Error("Informe um link HTTP ou HTTPS para o ingresso.");
+    throw Error("Selecione um local.");
+  if (!Number.isFinite(+e.startDate)) throw Error("Informe a data de início.");
+  if (!Number.isFinite(+e.endDate)) throw Error("Informe a data de término.");
+  if (e.endDate < e.startDate)
+    throw Error("A data final deve ser maior que a inicial.");
+  if (e.ticket.type === "external") {
+    if (!e.ticket.ticketUrl?.trim())
+      throw Error("Informe o link para compra do ingresso.");
+    if (!safeUrl(e.ticket.ticketUrl.trim()))
+      throw Error("Informe um link válido.");
+  }
+  if (/http|www\.|instagram\.com/i.test(e.instagram ?? ""))
+    throw Error("Informe apenas o usuário do Instagram.");
+  if (!normalizeSlug(e.title))
+    throw Error("Informe um título válido para gerar o link.");
 }

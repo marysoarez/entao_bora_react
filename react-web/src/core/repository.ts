@@ -17,13 +17,18 @@ import {
   GeoPoint,
 } from "firebase/firestore";
 import { assertProductWritesEnabled, database } from "./firebase";
+import { PartnerAccessService } from "./partnerAccessService";
+import { PlaceModulesService } from "./placeModulesService";
+import { membershipRef } from "./placeMembershipService";
+import { canCreatePlace, isPlatformAdmin } from "../shared/partnerPermissions";
+import { eventDocument } from "./eventDocument";
+import { validAutoCheckinSettings } from "../shared/checkIn";
 import {
   canCheckIn,
-  canManage,
-  isPartner,
   parseEvent,
   parsePlace,
   validateEvent,
+  normalizeSlug,
 } from "../shared/domain";
 import type { Event, Place, User, MenuItem } from "../shared/models";
 export async function resolvePublicEntity(
@@ -147,6 +152,11 @@ export async function checkIn(
       eventId: id,
       user: userSnapshot(user),
       checkedInAt: serverTimestamp(),
+      userId: user.id,
+      placeId: e.data().placeId ?? null,
+      source: "manual",
+      sources: ["manual"],
+      checkedOutAt: null,
       ...position,
     });
     tx.update(event, { checkinCount: increment(1) });
@@ -166,20 +176,34 @@ export async function owned(
   kind: "events" | "places",
   u: User,
 ): Promise<(Event | Place)[]> {
-  const db = database(),
-    field = kind === "events" ? "createdBy" : "ownerId";
-  const ids = [...new Set([u.id, ...(u.partnerId ? [u.partnerId] : [])])];
-  const results = await Promise.all(
-    ids.flatMap((id) =>
-      [field, `${field}.id`].map((f) =>
-        getDocs(query(collection(db, kind), where(f, "==", id))),
+  if (!u.active) return [];
+  const access = await PartnerAccessService.list(u);
+  if (kind === "places") return access.map((a) => a.place);
+  const db = database();
+  if (isPlatformAdmin(u)) {
+    const result = await getDocs(collection(db, "events"));
+    return result.docs.map((d) => parseEvent(d.id, d.data()));
+  }
+  const ids = [
+    ...new Set([
+      u.id,
+      ...(canCreatePlace(u) && u.partnerId ? [u.partnerId] : []),
+    ]),
+  ];
+  const results = await Promise.all([
+    ...ids.flatMap((id) =>
+      ["createdBy", "createdBy.id"].map((field) =>
+        getDocs(query(collection(db, "events"), where(field, "==", id))),
       ),
     ),
-  );
+    ...access.map((a) =>
+      getDocs(
+        query(collection(db, "events"), where("placeId", "==", a.place.id)),
+      ),
+    ),
+  ]);
   const docs = new Map(results.flatMap((s) => s.docs).map((d) => [d.id, d]));
-  return [...docs.values()].map((d) =>
-    kind === "events" ? parseEvent(d.id, d.data()) : parsePlace(d.id, d.data()),
-  );
+  return [...docs.values()].map((d) => parseEvent(d.id, d.data()));
 }
 export async function saveEntity(
   kind: "events" | "places",
@@ -190,11 +214,24 @@ export async function saveEntity(
     kind === "events" ? "Gravação de evento" : "Gravação de estabelecimento",
   );
   const db = database();
-  if (!user.active || (kind === "places" && !isPartner(user)))
+  if (!user.active || (kind === "places" && !value.id && !canCreatePlace(user)))
     throw Error("Sem permissão para salvar.");
-  if (kind === "events") validateEvent(value as Event);
-  else {
+  if (kind === "events") {
+    value = {
+      ...value,
+      slug:
+        value.id && value.slug
+          ? value.slug
+          : normalizeSlug((value as Event).title),
+    };
+    validateEvent(value as Event);
+  } else {
     const p = value as Place;
+    if (
+      p.autoCheckinSettings !== undefined &&
+      !validAutoCheckinSettings(p.autoCheckinSettings)
+    )
+      throw Error("Configuração de check-in automático inválida.");
     if (
       !p.name.trim() ||
       !p.description.trim() ||
@@ -210,54 +247,74 @@ export async function saveEntity(
     query(collection(db, kind), where("slug", "==", value.slug), limit(2)),
   );
   if (existing.docs.some((d) => d.id !== value.id))
-    throw Error("Este slug já está em uso.");
+    throw Error(
+      kind === "events"
+        ? "Já existe um evento com esse título."
+        : "Este slug já está em uso.",
+    );
   const ref = value.id ? doc(db, kind, value.id) : doc(collection(db, kind));
   await runTransaction(db, async (tx) => {
     const old = await tx.get(ref);
-    if (
-      old.exists() &&
-      !canManage(
-        user,
+    if (value.id && !old.exists()) throw Error("Registro não encontrado.");
+    if (old.exists()) {
+      const allowed =
         kind === "events"
-          ? parseEvent(old.id, old.data()).createdBy
-          : parsePlace(old.id, old.data()).ownerId,
-      )
-    )
-      throw Error("Você não pode editar este registro.");
+          ? await PartnerAccessService.canEvent(
+              user,
+              parseEvent(old.id, old.data()),
+              "manageEvents",
+              tx,
+            )
+          : await PartnerAccessService.canPlace(
+              user,
+              parsePlace(old.id, old.data()),
+              "editPlace",
+              tx,
+            );
+      if (!allowed) throw Error("Você não pode editar este registro.");
+    }
+    if (kind === "events") {
+      const next = value as Event;
+      const previousPlace = old.exists()
+        ? parseEvent(old.id, old.data()).placeId
+        : null;
+      if (next.placeId && next.placeId !== previousPlace)
+        await PartnerAccessService.assertLink(user, next.placeId, tx);
+    }
     const { id, ...payload } = value;
     void id;
-    const data: Record<string, unknown> = { ...payload };
+    let data: Record<string, unknown> = { ...payload };
     if (kind === "events") {
-      const e = value as Event;
-      Object.assign(data, {
-        startDate: Timestamp.fromDate(e.startDate),
-        endDate: Timestamp.fromDate(e.endDate),
-        updatedAt: serverTimestamp(),
-        createdAt: old.exists() ? old.data().createdAt : serverTimestamp(),
-        createdBy: old.exists() ? old.data().createdBy : user.id,
-        status: old.exists() ? (old.data().status ?? "draft") : "published",
-        ...Object.fromEntries(
-          ["views", "shares", "boraCount", "checkinCount"].map((k) => [
-            k,
-            old.exists() ? (old.data()[k] ?? 0) : 0,
-          ]),
-        ),
-      });
+      data = eventDocument(
+        value as Event,
+        user.id,
+        old.exists() ? old.data() : undefined,
+      );
     } else {
       data.id = ref.id;
       data.ownerId = old.exists()
         ? parsePlace(old.id, old.data()).ownerId
         : user.id;
       if (old.exists()) {
+        data.menuSchemaVersion = old.data().menuSchemaVersion ?? 1;
         data.menuItems = old.data().menuItems ?? [];
         data.menuCategories = old.data().menuCategories ?? [];
       }
     }
     if (new TextEncoder().encode(JSON.stringify(data)).length > 950000)
       throw Error(
-        "O conjunto de imagens e informa??es ? muito grande. Reduza as imagens.",
+        "O conjunto de imagens e informações é muito grande. Reduza a capa ou o texto.",
       );
-    tx.set(ref, data);
+    if (old.exists()) tx.update(ref, data);
+    else {
+      tx.set(ref, data);
+      if (kind === "places")
+        tx.set(membershipRef(ref.id, user.id), {
+          role: "owner",
+          active: true,
+          createdAt: serverTimestamp(),
+        });
+    }
   });
   return ref.id;
 }
@@ -275,9 +332,12 @@ export async function editMenu(
   await runTransaction(db, async (tx) => {
     const snap = await tx.get(ref);
     if (!snap.exists()) throw Error("Local não encontrado.");
+    if (snap.data().menuSchemaVersion === 2)
+      throw Error("Use o novo editor de cardapio.");
     const p = parsePlace(snap.id, snap.data());
-    if (!isPartner(user) || !canManage(user, p.ownerId))
+    if (!(await PartnerAccessService.canPlace(user, p, "editMenu", tx)))
       throw Error("Sem permissão.");
+    await PlaceModulesService.assertAvailable(placeId, "menu", tx);
     const next = change(p.menuItems, p.menuCategories);
     if (
       new TextEncoder().encode(JSON.stringify({ ...snap.data(), ...next }))
@@ -298,8 +358,12 @@ export async function transferEvent(id: string, targetId: string, user: User) {
     ]);
     if (
       !e.exists() ||
-      !isPartner(user) ||
-      !canManage(user, parseEvent(e.id, e.data()).createdBy)
+      !(await PartnerAccessService.canEvent(
+        user,
+        parseEvent(e.id, e.data()),
+        "transferEvents",
+        tx,
+      ))
     )
       throw Error("Sem permissão.");
     if (!u.exists()) throw Error("Usuário de destino não encontrado.");
@@ -341,6 +405,7 @@ function userSnapshot(user: User) {
     partnerId: user.partnerId,
     active: user.active,
     notificationsEnabled: user.notificationsEnabled,
+    notificationPreferences: user.notificationPreferences,
     locationSharingEnabled: user.locationSharingEnabled,
     ...(user.lastKnownLocation
       ? {

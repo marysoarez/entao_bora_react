@@ -1,3 +1,5 @@
+import { PartnerAccessService } from "../../core/partnerAccessService";
+import { usePartnerAccess } from "../partner-access/PartnerAccess";
 import { useEffect, useState, type FormEvent } from "react";
 import {
   Link,
@@ -12,15 +14,12 @@ import { assertProductWritesEnabled, database } from "../../core/firebase";
 import {
   activity,
   listPlaces,
-  editMenu,
   owned,
   resolvePublicEntity,
   saveEntity,
   transferEvent,
 } from "../../core/repository";
 import {
-  canManage,
-  currency,
   formatDate,
   locate,
   normalizeSlug,
@@ -31,19 +30,19 @@ import {
   genres,
   type Event,
   type Place,
-  type MenuItem,
   type Genre,
 } from "../../shared/models";
 import { useSession } from "../session";
 import { EventCard } from "../events/components/EventCard";
 import { Message } from "../../shared/ui/Message";
-import { setNotifications } from "../notifications";
+import { setNotificationPreferences, setNotifications } from "../notifications";
 import { AddressSearch } from "../AddressSearch";
 import { ImageUpload } from "../ImageUpload";
 import { Field } from "../../shared/ui/Field";
 const dateInput = (d: Date) =>
   new Date(+d - d.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
 export function Editor({ kind }: { kind: "events" | "places" }) {
+  const access = usePartnerAccess();
   const { id } = useParams(),
     { user } = useSession(),
     navigate = useNavigate();
@@ -71,16 +70,20 @@ export function Editor({ kind }: { kind: "events" | "places" }) {
           ? resolvePublicEntity("events", id)
           : resolvePublicEntity("places", id);
       promise
-        .then((v) => {
+        .then(async (v) => {
           if (!alive) return;
           if (!v) throw Error("Registro não encontrado.");
-          if (
-            !canManage(
-              user,
-              kind === "events" ? (v as Event).createdBy : (v as Place).ownerId,
-            )
-          )
-            throw Error("Sem permissão para editar.");
+          const allowed =
+            user &&
+            (kind === "events"
+              ? await PartnerAccessService.canEvent(user, v as Event)
+              : await PartnerAccessService.canPlace(
+                  user,
+                  v as Place,
+                  "editPlace",
+                ));
+          if (!allowed) throw Error("Sem permissão para editar.");
+          if (!alive) return;
           setValue(v);
         })
         .catch((e) => alive && setError(e.message))
@@ -117,7 +120,13 @@ export function Editor({ kind }: { kind: "events" | "places" }) {
       setBusy(false);
     }
   }
-  if (loading) return <Message>Carregando formulário…</Message>;
+  if (loading || access.loading)
+    return <Message>Carregando formulário…</Message>;
+  if (
+    kind === "places" &&
+    !(id ? access.can(value.id, "editPlace") : access.canCreate)
+  )
+    return <Message>Sem permissão para editar este estabelecimento.</Message>;
   if (id && !value.id)
     return <Message>{error || "Registro indisponível."}</Message>;
   return (
@@ -601,6 +610,7 @@ export function Editor({ kind }: { kind: "events" | "places" }) {
   );
 }
 export function Management({ dashboard = false }: { dashboard?: boolean }) {
+  const access = usePartnerAccess();
   const { user } = useSession(),
     [places, setPlaces] = useState<Place[]>([]),
     [events, setEvents] = useState<Event[]>([]),
@@ -632,9 +642,24 @@ export function Management({ dashboard = false }: { dashboard?: boolean }) {
         <h1 style={{ fontSize: 36 }}>
           {dashboard ? "Painel do parceiro" : "Seus estabelecimentos"}
         </h1>
-        <Link to={dashboard ? "/events/create" : "/places/create"}>
-          + Criar {dashboard ? "evento" : "local"}
-        </Link>
+        {(dashboard || access.canCreate) && (
+          <Link
+            to={
+              dashboard
+                ? `/events/create${params.get("placeId") ? `?placeId=${encodeURIComponent(params.get("placeId")!)}` : ""}`
+                : "/places/create"
+            }
+            state={
+              dashboard
+                ? {
+                    from: `/partner-dashboard${params.toString() ? `?${params}` : ""}`,
+                  }
+                : undefined
+            }
+          >
+            + Criar {dashboard ? "evento" : "local"}
+          </Link>
+        )}
       </div>
       {error && <Message>{error}</Message>}
       {loading && <Message>Carregando seus registros…</Message>}
@@ -747,7 +772,9 @@ export function Management({ dashboard = false }: { dashboard?: boolean }) {
               <p>{p.address.displayName}</p>
             </Link>
             <div className="actions">
-              <Link to={`/places/${p.id}/edit`}>Editar</Link>
+              {access.can(p.id, "editPlace") && (
+                <Link to={`/places/${p.id}/edit`}>Editar</Link>
+              )}
               <Link to={`/places/menu?placeId=${p.id}`}>Cardápio</Link>
             </div>
           </div>
@@ -755,238 +782,10 @@ export function Management({ dashboard = false }: { dashboard?: boolean }) {
       {!places.length && !loading && (
         <p>
           Você ainda não tem estabelecimentos.{" "}
-          <Link to="/places/create">Cadastrar local</Link>
+          {access.canCreate && <Link to="/places/create">Cadastrar local</Link>}
         </p>
       )}
     </>
-  );
-}
-export function MenuEditor() {
-  const { user } = useSession(),
-    [params, setParams] = useSearchParams(),
-    [places, setPlaces] = useState<Place[]>([]),
-    [error, setError] = useState(""),
-    [busy, setBusy] = useState(false),
-    [category, setCategory] = useState(""),
-    [item, setItem] = useState<MenuItem>({
-      id: "",
-      title: "",
-      description: "",
-      price: 0,
-      photo: "",
-      category: "Geral",
-    });
-  const place = places.find((p) => p.id === params.get("placeId"));
-  async function reload() {
-    if (user) setPlaces(await owned("places", user));
-  }
-  useEffect(() => {
-    let alive = true;
-    if (user)
-      owned("places", user)
-        .then((p) => alive && setPlaces(p))
-        .catch((e) => alive && setError(e.message));
-    return () => {
-      alive = false;
-    };
-  }, [user?.id]);
-  async function mutate(
-    change: (
-      items: MenuItem[],
-      categories: string[],
-    ) => { menuItems: MenuItem[]; menuCategories: string[] },
-  ) {
-    if (!user || !place) return;
-    setBusy(true);
-    setError("");
-    try {
-      await editMenu(place.id, user, change);
-      await reload();
-      return true;
-    } catch (e) {
-      setError((e as Error).message);
-      return false;
-    } finally {
-      setBusy(false);
-    }
-  }
-  return (
-    <div className="form">
-      <h1>Gerenciar cardápio</h1>
-      {error && <Message>{error}</Message>}
-      <Field label="Estabelecimento">
-        <select
-          value={place?.id ?? ""}
-          onChange={(e) => {
-            setParams({ placeId: e.target.value });
-            setItem({
-              id: "",
-              title: "",
-              description: "",
-              price: 0,
-              photo: "",
-              category: "Geral",
-            });
-          }}
-        >
-          <option value="">Selecione um local</option>
-          {places.map((p) => (
-            <option key={p.id} value={p.id}>
-              {p.name}
-            </option>
-          ))}
-        </select>
-      </Field>
-      {place && (
-        <>
-          <form
-            onSubmit={async (e) => {
-              e.preventDefault();
-              const name = category.trim();
-              if (!name) return;
-              if (
-                await mutate((items, categories) => {
-                  if (
-                    categories.some(
-                      (c) => c.toLocaleLowerCase() === name.toLocaleLowerCase(),
-                    ) ||
-                    name.toLowerCase() === "geral"
-                  )
-                    throw Error("Esta categoria já existe.");
-                  return {
-                    menuItems: items,
-                    menuCategories: [...categories, name],
-                  };
-                })
-              )
-                setCategory("");
-            }}
-          >
-            <Field label="Nova categoria">
-              <Input
-                required
-                value={category}
-                onChange={(e) => setCategory(e.target.value)}
-              />
-            </Field>
-            <Button disabled={busy} variant="outline">
-              Adicionar categoria
-            </Button>
-          </form>
-          <h2 style={{ marginTop: 30 }}>
-            {item.id ? "Editar item" : "Novo item"}
-          </h2>
-          <form
-            onSubmit={async (e) => {
-              e.preventDefault();
-              if (
-                !item.title.trim() ||
-                !Number.isFinite(item.price) ||
-                item.price < 0
-              ) {
-                setError("Informe um título e preço válido.");
-                return;
-              }
-              const saved = { ...item, id: item.id || crypto.randomUUID() };
-              if (
-                await mutate((items, categories) => ({
-                  menuItems: [...items.filter((i) => i.id !== saved.id), saved],
-                  menuCategories: categories,
-                }))
-              )
-                setItem({
-                  id: "",
-                  title: "",
-                  description: "",
-                  price: 0,
-                  photo: "",
-                  category: "Geral",
-                });
-            }}
-          >
-            <Field label="Nome *">
-              <Input
-                required
-                value={item.title}
-                onChange={(e) => setItem({ ...item, title: e.target.value })}
-              />
-            </Field>
-            <Field label="Descrição">
-              <textarea
-                value={item.description}
-                onChange={(e) =>
-                  setItem({ ...item, description: e.target.value })
-                }
-              />
-            </Field>
-            <div className="form-grid">
-              <Field label="Preço (R$) *">
-                <Input
-                  required
-                  type="number"
-                  min="0"
-                  step="0.01"
-                  value={item.price}
-                  onChange={(e) =>
-                    setItem({ ...item, price: Number(e.target.value) })
-                  }
-                />
-              </Field>
-              <Field label="Categoria">
-                <select
-                  value={item.category}
-                  onChange={(e) =>
-                    setItem({ ...item, category: e.target.value })
-                  }
-                >
-                  {[
-                    ...new Set([
-                      "Geral",
-                      ...place.menuCategories,
-                      item.category,
-                    ]),
-                  ].map((c) => (
-                    <option key={c}>{c}</option>
-                  ))}
-                </select>
-              </Field>
-            </div>
-            <Field label="URL da foto">
-              <Input
-                value={item.photo}
-                onChange={(e) => setItem({ ...item, photo: e.target.value })}
-              />
-            </Field>
-            <Button disabled={busy}>Salvar item</Button>
-          </form>
-          <h2 style={{ marginTop: 32 }}>Itens do cardápio</h2>
-          {place.menuItems.map((i) => (
-            <div className="management-row" key={i.id}>
-              <div>
-                <h3>{i.title}</h3>
-                <p>
-                  {i.category} · {currency(i.price)}
-                </p>
-              </div>
-              <div className="actions">
-                <button onClick={() => setItem(i)}>Editar</button>
-                <button
-                  disabled={busy}
-                  onClick={() =>
-                    mutate((items, categories) => ({
-                      menuItems: items.filter((x) => x.id !== i.id),
-                      menuCategories: categories,
-                    }))
-                  }
-                >
-                  Remover
-                </button>
-              </div>
-            </div>
-          ))}
-        </>
-      )}
-    </div>
   );
 }
 export function UserArea() {
@@ -1006,10 +805,10 @@ export function UserArea() {
     };
   }, [user?.id]);
   async function preference(action: () => Promise<unknown>) {
-    assertProductWritesEnabled("Atualização de preferências do perfil");
     setBusy(true);
     setError("");
     try {
+      assertProductWritesEnabled("Preferências do usuário");
       await action();
     } catch (e) {
       setError((e as Error).message);
@@ -1058,6 +857,69 @@ export function UserArea() {
           }
         >
           {user.locationSharingEnabled ? "Desativar" : "Ativar"}
+        </Button>
+      </div>
+      <div className="management-row">
+        <div>
+          <h3>Avisos de eventos</h3>
+          <p>Lembretes de eventos com os quais você interagiu.</p>
+        </div>
+        <Button
+          variant="outline"
+          disabled={busy || !user.notificationsEnabled}
+          onClick={() =>
+            preference(() =>
+              setNotificationPreferences(user, {
+                ...user.notificationPreferences,
+                events: !user.notificationPreferences.events,
+              }),
+            )
+          }
+        >
+          {user.notificationPreferences.events ? "Desativar" : "Ativar"}
+        </Button>
+      </div>
+      <div className="management-row">
+        <div>
+          <h3>Avisos de pedidos</h3>
+          <p>Status de pedidos vinculados aos seus atendimentos.</p>
+        </div>
+        <Button
+          variant="outline"
+          disabled={busy || !user.notificationsEnabled}
+          onClick={() =>
+            preference(() =>
+              setNotificationPreferences(user, {
+                ...user.notificationPreferences,
+                orders: !user.notificationPreferences.orders,
+              }),
+            )
+          }
+        >
+          {user.notificationPreferences.orders ? "Desativar" : "Ativar"}
+        </Button>
+      </div>
+      <div className="management-row">
+        <div>
+          <h3>Campanhas e novidades</h3>
+          <p>
+            Consentimento separado para marketing, eventos próximos e novidades
+            de estabelecimentos.
+          </p>
+        </div>
+        <Button
+          variant="outline"
+          disabled={busy || !user.notificationsEnabled}
+          onClick={() =>
+            preference(() =>
+              setNotificationPreferences(user, {
+                ...user.notificationPreferences,
+                marketing: !user.notificationPreferences.marketing,
+              }),
+            )
+          }
+        >
+          {user.notificationPreferences.marketing ? "Desativar" : "Ativar"}
         </Button>
       </div>
       <div className="management-row">

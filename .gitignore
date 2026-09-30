@@ -8,3 +8,8 @@ coverage/
 .DS_Store
 Thumbs.db
 /entao-bora-site.tar.gz
+
+# Local documentation and OpenAI configuration
+docs/
+.openai/
+.oppenai/

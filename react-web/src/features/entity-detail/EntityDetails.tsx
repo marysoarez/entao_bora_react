@@ -1,3 +1,5 @@
+import { PublicMenu } from "../menu-management/PublicMenu";
+import { usePartnerAccess } from "../partner-access/PartnerAccess";
 import { useEffect, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { MapPin, CalendarDays, Share2, Heart, Check } from "lucide-react";
@@ -12,8 +14,6 @@ import {
 } from "../../core/repository";
 import { configured } from "../../core/firebase";
 import {
-  canManage,
-  currency,
   formatDate,
   imageSource,
   locate,
@@ -25,6 +25,7 @@ import { setPageMetadata } from "../../shared/metadata";
 import { EventCard } from "../events/components/EventCard";
 import { Message } from "../../shared/ui/Message";
 export function EntityDetails({ kind }: { kind: "events" | "places" }) {
+  const access = usePartnerAccess();
   const { id = "" } = useParams(),
     { user, login } = useSession();
   const [entity, setEntity] = useState<Event | Place | null>(null),
@@ -194,20 +195,7 @@ export function EntityDetails({ kind }: { kind: "events" | "places" }) {
             <>
               <details>
                 <summary>Cardápio · {p.name}</summary>
-                {p.menuItems.length ? (
-                  p.menuItems.map((i) => (
-                    <div className="menu-item" key={i.id}>
-                      <div>
-                        <small>{i.category}</small>
-                        <h3>{i.title}</h3>
-                        <p>{i.description}</p>
-                      </div>
-                      <strong>{currency(i.price)}</strong>
-                    </div>
-                  ))
-                ) : (
-                  <p>Cardápio ainda não disponível.</p>
-                )}
+                <PublicMenu key={p.id} place={p} />
               </details>
               {p.openingHours.length > 0 && (
                 <details>
@@ -330,10 +318,7 @@ export function EntityDetails({ kind }: { kind: "events" | "places" }) {
             disabled={busy}
             onClick={() =>
               action(async () => {
-                const base =
-                  import.meta.env.VITE_PUBLIC_BASE_URL ||
-                  window.location.origin;
-                const url = `${base.replace(/\/$/, "")}/${event ? "events" : "place"}/${entity.slug || entity.id}`;
+                const url = `https://entaobora.com.br/${event ? "events" : "place"}/${entity.slug || entity.id}`;
                 if (navigator.share) await navigator.share({ title, url });
                 else {
                   await navigator.clipboard.writeText(url);
@@ -346,10 +331,7 @@ export function EntityDetails({ kind }: { kind: "events" | "places" }) {
             <Share2 size={16} />
             Compartilhar
           </Button>
-          {canManage(
-            user,
-            event ? event.createdBy : (entity as Place).ownerId,
-          ) && (
+          {(event ? access.canEvent(event) : access.can(entity.id, "editPlace")) && (
             <Link to={`/${event ? "events" : "places"}/${entity.id}/edit`}>
               Editar informações
             </Link>
