@@ -57,6 +57,7 @@ import { PartnerDashboardPage } from "../features/partner-dashboard/PartnerDashb
 import { UserArea } from "../features/user-area/UserArea";
 import { Message } from "../shared/ui/Message";
 import { PrivacyPolicyPage } from "../features/privacy/PrivacyPolicyPage";
+import { SpotifyMiniPlayer } from "../features/music/SpotifyMiniPlayer";
 function Home() {
   const [places, setPlaces] = useState<Place[]>([]),
     [events, setEvents] = useState<Event[]>([]),
@@ -282,6 +283,10 @@ function Home() {
           <Message>Nenhum estabelecimento encontrado.</Message>
         )}
       </section>
+      <SpotifyMiniPlayer
+        playlistId="37i9dQZF1EIeujtfBpf3lR"
+        title="Dá o play e bora"
+      />
       <div className="partner-callout">
         <div>
           <Music2 size={25} />
