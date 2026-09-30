@@ -3,6 +3,21 @@ dist/
 coverage/
 .env*
 !.env.example
+# Local Git recovery archives
+/.git-backups/
+
+# Credentials and private keys
+*.pem
+*.key
+*.p12
+*.pfx
+credentials.json
+service-account*.json
+serviceAccount*.json
+*-firebase-adminsdk-*.json
+.firebase/
+.secrets/
+secrets/
 *.log
 *.tsbuildinfo
 .DS_Store
