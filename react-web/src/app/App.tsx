@@ -57,6 +57,9 @@ import { PartnerDashboardPage } from "../features/partner-dashboard/PartnerDashb
 import { UserArea } from "../features/user-area/UserArea";
 import { Message } from "../shared/ui/Message";
 import { PrivacyPolicyPage } from "../features/privacy/PrivacyPolicyPage";
+import { SpotifyMiniPlayer } from "../features/music/SpotifyMiniPlayer";
+import { AdminPage } from "../features/admin/AdminPage";
+import { isPlatformAdmin } from "../shared/partnerPermissions";
 function Home() {
   const [places, setPlaces] = useState<Place[]>([]),
     [events, setEvents] = useState<Event[]>([]),
@@ -282,6 +285,10 @@ function Home() {
           <Message>Nenhum estabelecimento encontrado.</Message>
         )}
       </section>
+      <SpotifyMiniPlayer
+        playlistId="37i9dQZF1EIeujtfBpf3lR"
+        title="Dá o play e bora"
+      />
       <div className="partner-callout">
         <div>
           <Music2 size={25} />
@@ -297,9 +304,11 @@ function Home() {
 }
 function Guard({
   partner = false,
+  admin = false,
   children,
 }: {
   partner?: boolean;
+  admin?: boolean;
   children: ReactNode;
 }) {
   const { user, loading, login } = useSession();
@@ -328,6 +337,8 @@ function Guard({
         {partner ? "membros ativos de estabelecimentos" : "contas ativas"}.
       </Message>
     );
+  if (admin && !isPlatformAdmin(user))
+    return <Message>Esta área é exclusiva para administradores globais ativos.</Message>;
   return children;
 }
 function Shell() {
@@ -367,6 +378,7 @@ function Shell() {
           {access.canEnter && (
             <NavLink to="/partner-dashboard">Gestão do estabelecimento</NavLink>
           )}
+          {isPlatformAdmin(user) && <NavLink to="/admin">Administração</NavLink>}
         </nav>
         <Button
           className="login-button"
@@ -518,6 +530,14 @@ function Shell() {
             element={
               <Guard>
                 <UserArea />
+              </Guard>
+            }
+          />
+          <Route
+            path="/admin"
+            element={
+              <Guard admin>
+                <AdminPage />
               </Guard>
             }
           />

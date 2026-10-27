@@ -1,0 +1,30 @@
+.spotify-mini-player {
+  margin-top: 42px;
+  min-width: 0;
+}
+
+.spotify-mini-player h2 {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 14px;
+  font-size: 17px;
+}
+
+.spotify-mini-player h2 svg {
+  color: var(--primary);
+}
+
+.spotify-mini-player-embed {
+  height: 152px;
+  background: #161616;
+  border-radius: 12px;
+  overflow: hidden;
+}
+
+.spotify-mini-player-embed iframe {
+  display: block;
+  width: 100%;
+  height: 152px;
+  border: 0;
+}

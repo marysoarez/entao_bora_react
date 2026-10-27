@@ -1322,3 +1322,39 @@ summary {
 .qr-card { display: grid; justify-items: center; gap: .75rem; padding: 1rem; border: 1px solid var(--border); border-radius: 1rem; }
 .qr-card img { width: min(240px, 100%); height: auto; image-rendering: pixelated; }
 .qr-card code { max-width: 100%; overflow-wrap: anywhere; white-space: normal; }
+
+/* Global administration */
+.admin-page { display: grid; gap: 28px; }
+.admin-heading { display: flex; justify-content: space-between; align-items: start; gap: 24px; }
+.admin-heading h1 { margin: 8px 0; }
+.admin-tabs { display: flex; gap: 8px; overflow-x: auto; padding-bottom: 4px; }
+.admin-tabs button, .admin-shortcuts button { display: flex; align-items: center; gap: 8px; border: 1px solid var(--border); border-radius: 12px; background: transparent; color: inherit; padding: 11px 15px; cursor: pointer; white-space: nowrap; }
+.admin-tabs button.selected { border-color: var(--accent); color: var(--accent); background: color-mix(in srgb, var(--accent) 10%, transparent); }
+.admin-metrics { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 14px; }
+.admin-metrics article, .admin-detail-grid article { border: 1px solid var(--border); border-radius: 16px; padding: 18px; background: color-mix(in srgb, var(--background) 92%, white 8%); }
+.admin-metrics span { display: block; color: var(--muted-foreground, #aaa); font-size: 13px; }
+.admin-metrics strong { display: block; margin-top: 8px; font-size: 30px; }
+.admin-shortcuts { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
+.admin-shortcuts button { justify-content: center; min-height: 90px; font-weight: 700; }
+.admin-section, .admin-detail, .admin-entitlements { display: grid; gap: 20px; }
+.admin-search { display: flex; align-items: center; gap: 10px; max-width: 560px; }
+.admin-list, .admin-user-list { display: grid; gap: 10px; }
+.admin-list > button, .admin-user-list > article { width: 100%; display: flex; justify-content: space-between; align-items: center; gap: 20px; text-align: left; border: 1px solid var(--border); border-radius: 12px; padding: 15px; background: transparent; color: inherit; }
+.admin-list > button { cursor: pointer; }
+.admin-list span, .admin-user-list article > div:first-child { display: grid; gap: 4px; }
+.admin-list small, .admin-user-list small { color: var(--muted-foreground, #aaa); }
+.admin-detail-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 14px; }
+.admin-entitlements { padding-top: 12px; border-top: 1px solid var(--border); }
+.admin-entitlements label { display: grid; gap: 7px; }
+.admin-entitlements select, .admin-user-actions select { min-height: 40px; border: 1px solid var(--border); border-radius: 8px; background: var(--background); color: inherit; padding: 8px; }
+.admin-feature-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 10px; }
+.admin-feature-grid label { display: flex; align-items: center; gap: 10px; border: 1px solid var(--border); border-radius: 10px; padding: 12px; }
+.admin-feature-grid label span { display: grid; gap: 2px; }
+.admin-feature-grid small { color: var(--muted-foreground, #aaa); }
+.admin-feature-grid .read-only { opacity: .8; }
+.admin-user-actions { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+@media (max-width: 760px) {
+  .admin-heading, .admin-list > button, .admin-user-list > article { align-items: stretch; flex-direction: column; }
+  .admin-shortcuts, .admin-detail-grid { grid-template-columns: 1fr; }
+  .admin-user-actions > * { flex: 1; }
+}
