@@ -26,5 +26,10 @@ Thumbs.db
 
 # Local documentation and OpenAI configuration
 docs/
+!react-web/docs/
+react-web/docs/*
+!react-web/docs/plans-and-entitlements.md
+!react-web/docs/place-memberships.md
+!react-web/docs/place-modules.md
 .openai/
 .oppenai/

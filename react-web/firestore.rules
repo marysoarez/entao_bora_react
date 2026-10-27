@@ -71,12 +71,13 @@ service cloud.firestore {
         request.resource.data.role == 'user' && request.resource.data.active == true &&
         request.resource.data.partnerId == null &&
         request.resource.data.keys().hasOnly(['id', 'name', 'email', 'photoUrl', 'isAnonymous', 'updatedAt', 'role', 'active', 'partnerId', 'notificationsEnabled', 'notificationPreferences', 'locationSharingEnabled', 'autoCheckinConsentEnabled', 'autoCheckinConsentUpdatedAt']) && validNotificationPreferences();
-      allow update: if admin() || (signedIn() && request.auth.uid == uid &&
+      // Global role/active changes are performed by audited Cloud Functions.
+      allow update: if signedIn() && request.auth.uid == uid &&
         request.resource.data.diff(resource.data).affectedKeys().hasOnly([
           'id', 'name', 'email', 'photoUrl', 'isAnonymous', 'updatedAt',
           'notificationsEnabled', 'notificationPreferences', 'notificationUpdatedAt', 'locationSharingEnabled', 'lastKnownLocation', 'locationUpdatedAt',
           'autoCheckinConsentEnabled', 'autoCheckinConsentUpdatedAt'
-        ]) && request.resource.data.id == uid && validNotificationPreferences());
+        ]) && request.resource.data.id == uid && validNotificationPreferences();
       match /notification_tokens/{tokenId} {
         function validToken() {
           let d = request.resource.data;
@@ -101,6 +102,11 @@ service cloud.firestore {
     match /commercialPlans/{planKey} {
       // Commercial configuration is published by trusted billing/admin infrastructure.
       allow read: if active() && resource.data.active == true;
+      allow write: if false;
+    }
+
+    match /adminAuditLogs/{logId} {
+      allow read: if admin();
       allow write: if false;
     }
 
