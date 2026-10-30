@@ -1041,11 +1041,60 @@ footer .brand {
   font-size: 12px;
 }
 .partner-transfer {
-  padding: 24px;
-  background: #161616;
-  border: 1px solid #353535;
+  grid-column: 1 / -1;
+  padding: 22px;
+  background: #1d1b1b;
+  border: 1px solid #553535;
   border-radius: 10px;
 }
+.partner-transfer-heading,
+.partner-transfer-review {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+.partner-transfer-heading h3 { margin: 4px 0 0; }
+.partner-transfer-review {
+  justify-content: flex-start;
+  margin: 18px 0;
+  padding: 16px;
+  background: #141414;
+  border: 1px solid #353535;
+  border-radius: 8px;
+}
+.partner-transfer-review > div:not(.partner-transfer-arrow) {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+  flex: 1;
+}
+.partner-transfer-review span,
+.partner-transfer-review small { color: #aaa; font-size: 12px; }
+.partner-transfer-review strong { overflow-wrap: anywhere; }
+.partner-transfer-arrow { color: #d64545; font-size: 22px; }
+.partner-transfer-results {
+  display: grid;
+  margin-top: 8px;
+  border: 1px solid #444;
+  border-radius: 8px;
+  overflow: hidden;
+}
+.partner-transfer-results button {
+  display: grid;
+  gap: 3px;
+  padding: 12px;
+  text-align: left;
+  color: #f6f4f2;
+  background: #171717;
+  border: 0;
+  border-bottom: 1px solid #333;
+  cursor: pointer;
+}
+.partner-transfer-results button:last-child { border-bottom: 0; }
+.partner-transfer-results button:hover,
+.partner-transfer-results button:focus-visible { background: #292020; }
+.partner-transfer-results span { color: #aaa; font-size: 12px; }
 .partner-dashboard-empty {
   min-height: 440px;
   display: flex;

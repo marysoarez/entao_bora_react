@@ -21,6 +21,10 @@ import {
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { owned, transferEvent } from "../../core/repository";
+import {
+  searchEventTransferRecipients,
+  type TransferRecipient,
+} from "../../core/eventTransferService";
 import { formatDate } from "../../shared/domain";
 import { genres, type Event, type Place } from "../../shared/models";
 import { Field } from "../../shared/ui/Field";
@@ -47,7 +51,13 @@ export function PartnerDashboardPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [selectedEvent, setSelectedEvent] = useState("");
-  const [target, setTarget] = useState("");
+  const [recipientQuery, setRecipientQuery] = useState("");
+  const [recipients, setRecipients] = useState<TransferRecipient[]>([]);
+  const [selectedRecipient, setSelectedRecipient] =
+    useState<TransferRecipient | null>(null);
+  const [searchingRecipients, setSearchingRecipients] = useState(false);
+  const [recipientError, setRecipientError] = useState("");
+  const [transferSuccess, setTransferSuccess] = useState("");
   const [busy, setBusy] = useState(false);
 
   const selectedPlace = useMemo(() => {
@@ -75,6 +85,42 @@ export function PartnerDashboardPage() {
     () => eventsForPlace(events, selectedPlace?.id),
     [events, selectedPlace],
   );
+  const transferEventDetails = events.find((event) => event.id === selectedEvent);
+
+  useEffect(() => {
+    const term = recipientQuery.trim();
+    if (!selectedEvent || selectedRecipient || term.length < 2) {
+      setRecipients([]);
+      setRecipientError("");
+      setSearchingRecipients(false);
+      return;
+    }
+    let active = true;
+    const timeout = window.setTimeout(async () => {
+      setSearchingRecipients(true);
+      setRecipientError("");
+      try {
+        const result = await searchEventTransferRecipients(selectedEvent, term);
+        if (active) setRecipients(result);
+      } catch (cause) {
+        if (active) {
+          const error = cause as Error & { code?: string; stage?: string };
+          const diagnostics = [error.code, error.stage && `etapa: ${error.stage}`]
+            .filter(Boolean)
+            .join(" · ");
+          setRecipientError(
+            `${error.message}${diagnostics ? ` (${diagnostics})` : ""}`,
+          );
+        }
+      } finally {
+        if (active) setSearchingRecipients(false);
+      }
+    }, 300);
+    return () => {
+      active = false;
+      window.clearTimeout(timeout);
+    };
+  }, [recipientQuery, selectedEvent, selectedRecipient]);
 
   async function load() {
     if (!user) return;
@@ -122,13 +168,18 @@ export function PartnerDashboardPage() {
 
   async function submitTransfer(event: SyntheticEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!user || !selectedEvent || !target.trim() || busy) return;
+    if (!user || !selectedEvent || !selectedRecipient || busy) return;
     setBusy(true);
     setError("");
     try {
-      await transferEvent(selectedEvent, target.trim(), user);
+      await transferEvent(selectedEvent, selectedRecipient.id, user);
+      setTransferSuccess(
+        `“${transferEventDetails?.title ?? "Evento"}” foi transferido para ${selectedRecipient.name}.`,
+      );
       setSelectedEvent("");
-      setTarget("");
+      setRecipientQuery("");
+      setSelectedRecipient(null);
+      setRecipients([]);
       await load();
     } catch (cause) {
       setError((cause as Error).message);
@@ -333,6 +384,7 @@ export function PartnerDashboardPage() {
           <span>{visibleEvents.length} evento(s)</span>
         </div>
         <div className="partner-event-list">
+          {transferSuccess && <Message>{transferSuccess}</Message>}
           {visibleEvents.map((event) => (
             <article className="partner-event-row" key={event.id}>
               <div>
@@ -398,14 +450,101 @@ export function PartnerDashboardPage() {
                   <button
                     type="button"
                     onClick={() => {
+                      setTransferSuccess("");
                       setSelectedEvent(event.id);
-                      setTarget("");
+                      setRecipientQuery("");
+                      setSelectedRecipient(null);
+                      setRecipients([]);
                     }}
                   >
                     <Send size={15} /> Transferir
                   </button>
                 )}
               </div>
+              {selectedEvent === event.id && access.canEvent(event, "transferEvents") && (
+                <form className="partner-transfer" onSubmit={submitTransfer}>
+                  <div className="partner-transfer-heading">
+                    <div>
+                      <span className="eyebrow">REVISÃO DA TRANSFERÊNCIA</span>
+                      <h3>Confirme o evento e o novo responsável</h3>
+                    </div>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      disabled={busy}
+                      onClick={() => setSelectedEvent("")}
+                    >
+                      Cancelar
+                    </Button>
+                  </div>
+                  <div className="partner-transfer-review">
+                    <div>
+                      <span>EVENTO</span>
+                      <strong>{event.title}</strong>
+                      <small>{formatDate(event.startDate)} · {event.locationName}</small>
+                    </div>
+                    <div aria-hidden="true" className="partner-transfer-arrow">→</div>
+                    <div>
+                      <span>NOVO RESPONSÁVEL</span>
+                      {selectedRecipient ? (
+                        <>
+                          <strong>{selectedRecipient.name}</strong>
+                          <small>{selectedRecipient.email || "E-mail não informado"}</small>
+                        </>
+                      ) : (
+                        <strong className="subtle">Selecione uma pessoa abaixo</strong>
+                      )}
+                    </div>
+                  </div>
+                  {!selectedRecipient ? (
+                    <Field label="Buscar destinatário por nome ou e-mail">
+                      <Input
+                        autoComplete="off"
+                        value={recipientQuery}
+                        onChange={(inputEvent) => {
+                          setRecipientQuery(inputEvent.target.value);
+                          setRecipients([]);
+                        }}
+                        placeholder="Digite ao menos 2 caracteres"
+                      />
+                      <small>Pesquise pelo começo do nome ou do e-mail.</small>
+                      {searchingRecipients && <small>Buscando pessoas…</small>}
+                      {recipientError && <small role="alert">{recipientError}</small>}
+                      {!!recipients.length && (
+                        <div className="partner-transfer-results" aria-label="Resultados da busca">
+                          {recipients.map((recipient) => (
+                            <button
+                              type="button"
+                              key={recipient.id}
+                              onClick={() => setSelectedRecipient(recipient)}
+                            >
+                              <strong>{recipient.name || "Nome não informado"}</strong>
+                              <span>{recipient.email || "E-mail não informado"}</span>
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                      {!searchingRecipients && recipientQuery.trim().length >= 2 && !recipients.length && !recipientError && (
+                        <small>Nenhuma pessoa encontrada. Ajuste a busca.</small>
+                      )}
+                    </Field>
+                  ) : (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={() => setSelectedRecipient(null)}
+                    >
+                      Escolher outra pessoa
+                    </Button>
+                  )}
+                  <p>A transferência altera o responsável e mantém o vínculo com o estabelecimento.</p>
+                  <div className="form-actions">
+                    <Button type="submit" disabled={busy || !selectedRecipient}>
+                      {busy ? "Transferindo…" : "Confirmar transferência"}
+                    </Button>
+                  </div>
+                </form>
+              )}
             </article>
           ))}
         </div>
@@ -425,40 +564,6 @@ export function PartnerDashboardPage() {
           <PlaceMembers key={selectedPlace.id} placeId={selectedPlace.id} />
         </div>
       )}
-      {selectedEvent &&
-        events.some(
-          (event) =>
-            event.id === selectedEvent &&
-            access.canEvent(event, "transferEvents"),
-        ) && (
-          <form className="partner-transfer" onSubmit={submitTransfer}>
-            <h2>Transferir evento</h2>
-            <Field label="ID do usuário que receberá o evento">
-              <Input
-                required
-                value={target}
-                onChange={(event) => setTarget(event.target.value)}
-              />
-            </Field>
-            <p>
-              A transferência altera o responsável e mantém o vínculo com o
-              estabelecimento.
-            </p>
-            <div className="form-actions">
-              <Button type="submit" disabled={busy || !target.trim()}>
-                {busy ? "Transferindo…" : "Confirmar transferência"}
-              </Button>
-              <Button
-                type="button"
-                variant="ghost"
-                disabled={busy}
-                onClick={() => setSelectedEvent("")}
-              >
-                Cancelar
-              </Button>
-            </div>
-          </form>
-        )}
     </div>
   );
 }
