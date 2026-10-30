@@ -69,7 +69,7 @@ function Home() {
     [search, setSearch] = useState(""),
     [genre, setGenre] = useState(""),
     [tab, setTab] = useState("events"),
-    [view, setView] = useState("list"),
+    [view, setView] = useState("map"),
     [free, setFree] = useState(false),
     [position, setPosition] = useState<{
       latitude: number;
