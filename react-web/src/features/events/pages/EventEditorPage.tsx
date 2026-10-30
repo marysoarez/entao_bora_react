@@ -15,11 +15,7 @@ import {
   resolvePublicEntity,
   saveEntity,
 } from "../../../core/repository";
-import {
-  imageSource,
-  parseEvent,
-  validateEvent,
-} from "../../../shared/domain";
+import { imageSource, parseEvent, validateEvent } from "../../../shared/domain";
 import {
   genres,
   type Event,
@@ -32,6 +28,8 @@ import { useSession } from "../../session";
 import { AddressSearch } from "../../AddressSearch";
 import { ImageUpload } from "../../ImageUpload";
 import { refineEventAddress } from "../eventAddress";
+import { isPlatformAdmin } from "../../../shared/partnerPermissions";
+import { setFeaturedEvent } from "../../../core/repository";
 
 const emptyAddress = () => ({ displayName: "", latitude: NaN, longitude: NaN });
 const emptyEvent = () =>
@@ -95,17 +93,37 @@ export function EventEditorPage() {
         ]);
         if (!alive) return;
         if (id && !event) throw Error("Evento não encontrado.");
-        if (event && !await PartnerAccessService.canEvent(currentUser, event))
+        if (event && !(await PartnerAccessService.canEvent(currentUser, event)))
           throw Error("Sem permissão para editar.");
-        const allowedPlaces = (await Promise.all(loaded.map(async p => await PartnerAccessService.canPlace(currentUser, p, "manageEvents") ? p : null))).filter((p): p is Place => !!p);
+        const allowedPlaces = (
+          await Promise.all(
+            loaded.map(async (p) =>
+              (await PartnerAccessService.canPlace(
+                currentUser,
+                p,
+                "manageEvents",
+              ))
+                ? p
+                : null,
+            ),
+          )
+        ).filter((p): p is Place => !!p);
         if (!alive) return;
-        if (!event && requestedPlace && !allowedPlaces.some(p => p.id === requestedPlace)) throw Error("Sem permissão para criar eventos neste estabelecimento.");
+        if (
+          !event &&
+          requestedPlace &&
+          !allowedPlaces.some((p) => p.id === requestedPlace)
+        )
+          throw Error(
+            "Sem permissão para criar eventos neste estabelecimento.",
+          );
         setPlaces(allowedPlaces);
         const next = event || emptyEvent();
         const place = event?.placeId
           ? allowedPlaces.find((p) => p.id === event.placeId)
           : !event
-            ? allowedPlaces.find((p) => p.id === requestedPlace) || allowedPlaces[0]
+            ? allowedPlaces.find((p) => p.id === requestedPlace) ||
+              allowedPlaces[0]
             : undefined;
         // Preserve an existing association if its place is no longer accessible.
         if (place) {
@@ -163,7 +181,10 @@ export function EventEditorPage() {
         next.address = await refineEventAddress(next.address);
         next.locationName = next.address.displayName;
       }
-      await saveEntity("events", next, user);
+      if (!isPlatformAdmin(user)) next.featured = value.featured;
+      const savedId = await saveEntity("events", next, user);
+      if (isPlatformAdmin(user))
+        await setFeaturedEvent(savedId, next.featured, user);
       navigate(returnTo, {
         state: {
           eventSuccess: id
@@ -193,8 +214,17 @@ export function EventEditorPage() {
         <i />
       </div>
     );
-  if (id && value.id && !access.loading && !access.canEvent(value)) return <Message>Sem permissão para editar este evento.</Message>;
-  if (!id && requestedPlace && !access.loading && !access.can(requestedPlace, "manageEvents")) return <Message>Sem permissão para criar eventos neste estabelecimento.</Message>;
+  if (id && value.id && !access.loading && !access.canEvent(value))
+    return <Message>Sem permissão para editar este evento.</Message>;
+  if (
+    !id &&
+    requestedPlace &&
+    !access.loading &&
+    !access.can(requestedPlace, "manageEvents")
+  )
+    return (
+      <Message>Sem permissão para criar eventos neste estabelecimento.</Message>
+    );
   if (id && !value.id)
     return <Message>{error || "Evento indisponível."}</Message>;
   return (
@@ -433,6 +463,19 @@ export function EventEditorPage() {
               }
             />
           </Field>
+        )}
+        {isPlatformAdmin(user) && (
+          <label className="event-feature-toggle">
+            <input
+              type="checkbox"
+              checked={value.featured}
+              onChange={(e) => patch({ featured: e.target.checked })}
+            />
+            <span>
+              <strong>Evento de destaque na home</strong>
+              <small>Este evento será o único destaque ativo.</small>
+            </span>
+          </label>
         )}
         <Button type="submit" disabled={busy || coverBusy}>
           {coverBusy

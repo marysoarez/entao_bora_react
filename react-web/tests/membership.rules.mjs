@@ -1007,6 +1007,36 @@ test("admin ativo acessa todos os locais e membros", async () => {
     updateDoc(doc(db("admin"), "events/linked"), { createdBy: "target" }),
   );
 });
+test("somente admin ativo define evento em destaque", async () => {
+  await assertSucceeds(
+    updateDoc(doc(db("manager"), "events/linked"), {
+      title: "Show legado editado",
+      featured: false,
+    }),
+  );
+  await assertFails(
+    updateDoc(doc(db("manager"), "events/linked"), { featured: true }),
+  );
+  await assertFails(
+    setDoc(doc(db("manager"), "events/new-featured"), {
+      title: "Show",
+      createdBy: "manager",
+      placeId: null,
+      featured: true,
+    }),
+  );
+  await assertSucceeds(
+    updateDoc(doc(db("admin"), "events/linked"), { featured: true }),
+  );
+  await assertSucceeds(
+    setDoc(doc(db("admin"), "events/admin-featured"), {
+      title: "Show admin",
+      createdBy: "admin",
+      placeId: null,
+      featured: true,
+    }),
+  );
+});
 test("owner principal não é desativado e vínculos não podem ser apagados", async () => {
   await assertFails(
     setDoc(doc(db("owner"), "places/one/members/owner"), {

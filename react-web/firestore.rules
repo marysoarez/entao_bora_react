@@ -649,6 +649,8 @@ service cloud.firestore {
         let sameAuthor = referenceId(request.resource.data.createdBy) == referenceId(resource.data.createdBy);
         return sameAuthor
           ? eventAccess(resource.data, false) && unchangedMetrics() &&
+            (!changed.hasAny(['featured']) || admin() ||
+              (resource.data.get('featured', false) == false && request.resource.data.get('featured', false) == false)) &&
             request.resource.data.get('createdAt', null) == resource.data.get('createdAt', null) &&
             (request.resource.data.get('placeId', null) == resource.data.get('placeId', null) || validLink(request.resource.data))
           : changed.hasOnly(['createdBy', 'updatedAt']) && eventAccess(resource.data, true) &&
@@ -663,6 +665,7 @@ service cloud.firestore {
       }
       allow read: if true;
       allow create: if active() && request.resource.data.createdBy == request.auth.uid && validLink(request.resource.data) &&
+        (request.resource.data.get('featured', false) == false || admin()) &&
         request.resource.data.get('boraCount', 0) == 0 && request.resource.data.get('checkinCount', 0) == 0 &&
         request.resource.data.get('views', 0) == 0 && request.resource.data.get('shares', 0) == 0;
       allow update: if updateEvent();

@@ -113,6 +113,7 @@ export interface Event {
   checkinCount: number;
   views: number;
   shares: number;
+  featured: boolean;
   createdBy: string;
   status: "draft" | "published" | "cancelled" | "finished" | "hidden";
 }
