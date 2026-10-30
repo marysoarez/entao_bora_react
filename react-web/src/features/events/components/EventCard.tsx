@@ -2,6 +2,7 @@ import { ArrowUpRight, MapPin, Music2 } from "lucide-react";
 import { Link } from "react-router-dom";
 import { formatDate, imageSource } from "../../../shared/domain";
 import { genres, type Event } from "../../../shared/models";
+import { Star } from "lucide-react";
 
 export function EventCard({ event }: { event: Event }) {
   return (
@@ -15,6 +16,11 @@ export function EventCard({ event }: { event: Event }) {
         <span className="badge">
           {event.ticket.type === "free" ? "Entrada gratuita" : "Ingressos"}
         </span>
+        {event.featured && (
+          <span className="featured-card-badge">
+            <Star size={13} fill="currentColor" /> Em destaque
+          </span>
+        )}
       </div>
       <div className="card-body">
         <small className="accent">{formatDate(event.startDate)}</small>

@@ -31,13 +31,15 @@ import {
   SlidersHorizontal,
   Ghost,
   Sparkles,
+  Star,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { SessionProvider, useSession } from "../features/session";
 import { configured } from "../core/firebase";
+import { logPageView } from "../core/analytics";
 import { watchPublic } from "../core/repository";
-import { locate } from "../shared/domain";
+import { imageSource, locate } from "../shared/domain";
 import { genres, type Event, type Place } from "../shared/models";
 import { MapView } from "../features/MapView";
 import { registerSearchTool } from "../shared/webmcp";
@@ -109,6 +111,7 @@ function Home() {
         .toLowerCase()
         .includes(search.toLowerCase()),
   );
+  const featuredEvent = events.find((event) => event.featured);
   const filteredPlaces = places.filter(
     (p) =>
       (!genre || p.musicGenres.includes(genre as keyof typeof genres)) &&
@@ -122,9 +125,6 @@ function Home() {
             <Ghost />
             <Sparkles />
           </div>
-          <span className="eyebrow">
-            <span className="live-dot" /> A CIDADE ESTÁ NO RITMO
-          </span>
           <h1>
             Seu próximo rolê
             <br />
@@ -153,7 +153,7 @@ function Home() {
           </Button>
         </div>
       </div>
-      <div className="explore-bar">
+      <div className="explore-bar" aria-label="Buscar e filtrar rolês">
         <div className="search">
           <Search size={19} />
           <Input
@@ -183,6 +183,7 @@ function Home() {
         <div className="tabs">
           <button
             className={tab === "events" ? "selected" : ""}
+            aria-pressed={tab === "events"}
             onClick={() => setTab("events")}
           >
             <CalendarDays size={17} />
@@ -190,6 +191,7 @@ function Home() {
           </button>
           <button
             className={tab === "places" ? "selected" : ""}
+            aria-pressed={tab === "places"}
             onClick={() => setTab("places")}
           >
             <MapPin size={17} />
@@ -206,7 +208,8 @@ function Home() {
             Gratuitos
           </label>
           <button
-            className={view === "list" ? "selected" : ""}
+            aria-pressed={view === "map"}
+            className={view === "map" ? "selected" : ""}
             onClick={() => setView(view === "map" ? "list" : "map")}
           >
             {view === "map" ? <List size={17} /> : <Compass size={17} />}
@@ -214,18 +217,61 @@ function Home() {
           </button>
         </div>
       </div>
+      {featuredEvent && (
+        <section
+          className="featured-event-section"
+          aria-labelledby="featured-event-title"
+        >
+          <div className="featured-event-heading">
+            <span>
+              <Star size={15} fill="currentColor" /> EM DESTAQUE
+            </span>
+            <span>Uma dica para seu próximo rolê</span>
+          </div>
+          <Link
+            className="featured-event"
+            to={`/events/${featuredEvent.slug || featuredEvent.id}`}
+          >
+            <img
+              src={
+                featuredEvent.coverImage
+                  ? imageSource(featuredEvent.coverImage)
+                  : "/brand.jpg"
+              }
+              alt=""
+            />
+            <div>
+              <small>
+                {new Intl.DateTimeFormat("pt-BR", {
+                  dateStyle: "full",
+                  timeStyle: "short",
+                }).format(featuredEvent.startDate)}
+              </small>
+              <h2 id="featured-event-title">{featuredEvent.title}</h2>
+              <p>
+                <MapPin size={15} /> {featuredEvent.locationName}
+              </p>
+              <strong>
+                Ver evento <ArrowUpRight size={17} />
+              </strong>
+            </div>
+          </Link>
+        </section>
+      )}
       <section>
         <div className="section-title">
           <h2>
             {view === "map"
-              ? "Encontre sua vibe no mapa"
+              ? tab === "events"
+                ? "Eventos no mapa"
+                : "Estabelecimentos no mapa"
               : tab === "events"
                 ? "O que vai rolar"
                 : "Lugares para conhecer"}
           </h2>
           <span>
             {tab === "events" ? filteredEvents.length : filteredPlaces.length}{" "}
-            encontrados
+            {tab === "events" ? "eventos" : "lugares"}
           </span>
         </div>
         {error && (
@@ -259,8 +305,8 @@ function Home() {
           </div>
         ) : view === "map" ? (
           <MapView
-            places={filteredPlaces}
-            events={filteredEvents}
+            places={tab === "places" ? filteredPlaces : []}
+            events={tab === "events" ? filteredEvents : []}
             position={position}
           />
         ) : tab === "events" ? (
@@ -338,7 +384,11 @@ function Guard({
       </Message>
     );
   if (admin && !isPlatformAdmin(user))
-    return <Message>Esta área é exclusiva para administradores globais ativos.</Message>;
+    return (
+      <Message>
+        Esta área é exclusiva para administradores globais ativos.
+      </Message>
+    );
   return children;
 }
 function Shell() {
@@ -355,6 +405,7 @@ function Shell() {
   useEffect(() => {
     window.scrollTo(0, 0);
     setError("");
+    void logPageView(location.pathname);
   }, [location.pathname]);
   return (
     <>
@@ -378,7 +429,9 @@ function Shell() {
           {access.canEnter && (
             <NavLink to="/partner-dashboard">Gestão do estabelecimento</NavLink>
           )}
-          {isPlatformAdmin(user) && <NavLink to="/admin">Administração</NavLink>}
+          {isPlatformAdmin(user) && (
+            <NavLink to="/admin">Administração</NavLink>
+          )}
         </nav>
         <Button
           className="login-button"

@@ -15,6 +15,7 @@ import {
   increment,
   serverTimestamp,
   GeoPoint,
+  writeBatch,
 } from "firebase/firestore";
 import { assertProductWritesEnabled, database } from "./firebase";
 import { PartnerAccessService } from "./partnerAccessService";
@@ -275,6 +276,14 @@ export async function saveEntity(
     }
     if (kind === "events") {
       const next = value as Event;
+      const previousEvent = old.exists()
+        ? parseEvent(old.id, old.data())
+        : null;
+      if (
+        !isPlatformAdmin(user) &&
+        next.featured !== (previousEvent?.featured ?? false)
+      )
+        throw Error("Somente administradores podem alterar o destaque.");
       const previousPlace = old.exists()
         ? parseEvent(old.id, old.data()).placeId
         : null;
@@ -317,6 +326,33 @@ export async function saveEntity(
     }
   });
   return ref.id;
+}
+export async function setFeaturedEvent(
+  eventId: string,
+  featured: boolean,
+  user: User,
+) {
+  assertProductWritesEnabled("Destaque do evento");
+  if (!isPlatformAdmin(user))
+    throw Error("Somente administradores podem destacar eventos.");
+  const db = database();
+  const selectedRef = doc(db, "events", eventId);
+  const [selected, activeFeatured] = await Promise.all([
+    getDoc(selectedRef),
+    featured
+      ? getDocs(query(collection(db, "events"), where("featured", "==", true)))
+      : Promise.resolve(null),
+  ]);
+  if (!selected.exists()) throw Error("Evento não encontrado.");
+  if (featured && selected.data().status !== "published")
+    throw Error("Somente eventos publicados podem ser destacados.");
+  const batch = writeBatch(db);
+  for (const candidate of activeFeatured?.docs ?? []) {
+    if (candidate.id !== eventId)
+      batch.update(candidate.ref, { featured: false });
+  }
+  batch.update(selectedRef, { featured });
+  await batch.commit();
 }
 export async function editMenu(
   placeId: string,

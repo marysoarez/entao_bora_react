@@ -84,7 +84,7 @@ export function MapView({
             lat: position?.latitude ?? -22.9068,
             lng: position?.longitude ?? -43.1729,
           },
-          zoom: position ? 14 : 11,
+          zoom: position ? 16 : 14,
           mapId: import.meta.env.VITE_GOOGLE_MAPS_MAP_ID || undefined,
           streetViewControl: false,
           mapTypeControl: false,
