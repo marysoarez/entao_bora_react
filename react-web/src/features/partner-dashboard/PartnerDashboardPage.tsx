@@ -96,8 +96,8 @@ export function PartnerDashboardPage() {
       return;
     }
     let active = true;
+    setSearchingRecipients(true);
     const timeout = window.setTimeout(async () => {
-      setSearchingRecipients(true);
       setRecipientError("");
       try {
         const result = await searchEventTransferRecipients(selectedEvent, term);
@@ -105,11 +105,18 @@ export function PartnerDashboardPage() {
       } catch (cause) {
         if (active) {
           const error = cause as Error & { code?: string; stage?: string };
+          const friendlyMessage = error.code === "functions/permission-denied"
+            ? "Sua conta não tem permissão para buscar destinatários deste evento."
+            : error.code === "functions/unauthenticated"
+              ? "Sua sessão expirou. Entre novamente para buscar destinatários."
+              : error.code === "functions/resource-exhausted"
+                ? "Há muitos perfis semelhantes. Digite mais caracteres para refinar a busca."
+                : error.message;
           const diagnostics = [error.code, error.stage && `etapa: ${error.stage}`]
             .filter(Boolean)
             .join(" · ");
           setRecipientError(
-            `${error.message}${diagnostics ? ` (${diagnostics})` : ""}`,
+            `${friendlyMessage}${diagnostics ? ` (${diagnostics})` : ""}`,
           );
         }
       } finally {
@@ -507,8 +514,8 @@ export function PartnerDashboardPage() {
                         }}
                         placeholder="Digite ao menos 2 caracteres"
                       />
-                      <small>Pesquise pelo começo do nome ou do e-mail.</small>
-                      {searchingRecipients && <small>Buscando pessoas…</small>}
+                      <small>Pesquise por qualquer trecho com pelo menos 2 caracteres do nome ou do e-mail.</small>
+                      {searchingRecipients && <small role="status" aria-live="polite">Buscando pessoas…</small>}
                       {recipientError && <small role="alert">{recipientError}</small>}
                       {!!recipients.length && (
                         <div className="partner-transfer-results" aria-label="Resultados da busca">
@@ -525,7 +532,7 @@ export function PartnerDashboardPage() {
                         </div>
                       )}
                       {!searchingRecipients && recipientQuery.trim().length >= 2 && !recipients.length && !recipientError && (
-                        <small>Nenhuma pessoa encontrada. Ajuste a busca.</small>
+                        <small role="status" aria-live="polite">Nenhuma pessoa encontrada. Confira a grafia ou tente outro trecho do nome ou e-mail.</small>
                       )}
                     </Field>
                   ) : (

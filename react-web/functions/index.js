@@ -1,7 +1,15 @@
 import { onCall, HttpsError } from "firebase-functions/v2/https";
+import { onDocumentWritten } from "firebase-functions/v2/firestore";
 import { logger } from "firebase-functions";
 import { initializeApp } from "firebase-admin/app";
 import { getFirestore, FieldValue, Timestamp } from "firebase-admin/firestore";
+import {
+  canTransferEvent as hasTransferPermission,
+  makeRecipient,
+  normalizeSearchText,
+  recipientMatches,
+  searchGrams,
+} from "./transferRecipientSearch.js";
 
 initializeApp();
 const region = "southamerica-east1";
@@ -82,36 +90,33 @@ function entitlement(input) {
   };
 }
 
-function referenceId(value) {
-  if (typeof value === "string") return value;
-  return value && typeof value === "object" && typeof value.id === "string"
-    ? value.id
-    : "";
-}
-
-function responsible(actor, owner) {
-  const ownerId = referenceId(owner);
-  return !!ownerId &&
-    (ownerId === actor.uid ||
-      (actor.role === "partner" && actor.partnerId === ownerId));
-}
-
-async function canTransferEvent(db, actor, event) {
-  if (actor.role === "admin") return true;
-  const placeId = event.placeId;
-  if (typeof placeId === "string" && placeId.trim()) {
-    const [place, membership] = await Promise.all([
-      db.doc(`places/${placeId}`).get(),
-      db.doc(`places/${placeId}/members/${actor.uid}`).get(),
-    ]);
-    if (membership.exists) {
-      return place.exists && membership.get("active") === true &&
-        membership.get("role") === "owner";
+export const syncUserRecipientSearchIndex = onDocumentWritten(
+  { document: "users/{uid}", region },
+  async (event) => {
+    try {
+      const after = event.data?.after;
+      const indexRef = getFirestore().doc(`userRecipientSearch/${event.params.uid}`);
+      if (!after?.exists) {
+        await indexRef.delete();
+        return;
+      }
+      const profile = after.data();
+      const validRole = ["user", "partner", "admin"].includes(profile.role);
+      const tokens = searchGrams(profile.name, profile.email);
+      if (profile.active !== true || !validRole || !tokens.length) {
+        await indexRef.delete();
+        return;
+      }
+      await indexRef.set({ tokens });
+    } catch (error) {
+      logger.error("Recipient search index sync failed", {
+        stage: "index-sync",
+        errorCode: error?.code || "unknown",
+      });
+      throw error;
     }
-    if (place.exists && responsible(actor, place.get("ownerId"))) return true;
-  }
-  return actor.role === "partner" && responsible(actor, event.createdBy);
-}
+  },
+);
 
 export const searchEventTransferRecipients = onCall(
   { region, timeoutSeconds: 30 },
@@ -123,7 +128,7 @@ export const searchEventTransferRecipients = onCall(
       const db = getFirestore();
       stage = "actor-profile";
       const actorSnap = await db.doc(`users/${request.auth.uid}`).get();
-      if (!actorSnap.exists || actorSnap.get("active") === false)
+      if (!actorSnap.exists || actorSnap.get("active") !== true)
         throw new HttpsError("permission-denied", "Conta ativa obrigatória.");
       const eventId = id(request.data?.eventId, "Evento");
       const term = request.data?.term;
@@ -137,28 +142,38 @@ export const searchEventTransferRecipients = onCall(
       stage = "transfer-permission";
       let permitted;
       try {
-        permitted = await canTransferEvent(db, actor, eventSnap.data());
+        const eventData = eventSnap.data();
+        let place = null;
+        let membership = null;
+        if (typeof eventData.placeId === "string" && eventData.placeId.trim()) {
+          const [placeSnap, membershipSnap] = await Promise.all([
+            db.doc(`places/${eventData.placeId}`).get(),
+            db.doc(`places/${eventData.placeId}/members/${actor.uid}`).get(),
+          ]);
+          if (placeSnap.exists) place = { id: placeSnap.id, ...placeSnap.data() };
+          if (membershipSnap.exists) membership = { uid: actor.uid, placeId: eventData.placeId, ...membershipSnap.data() };
+        }
+        permitted = hasTransferPermission(actor, eventData, place, membership);
       } catch (error) {
         logger.error("Recipient search permission check failed", {
           stage,
-          uid: request.auth.uid,
-          eventId,
-          error: error instanceof Error ? error.message : String(error),
+          errorCode: error?.code || "unknown",
         });
         throw new HttpsError("internal", "Não foi possível validar a permissão de transferência.", { stage });
       }
       if (!permitted)
         throw new HttpsError("permission-denied", "Sem permissão para transferir este evento.");
 
-      const normalized = term.trim().toLowerCase();
-      const field = normalized.includes("@") ? "email" : "name";
-      // Page through ordered profiles and compare normalized values. This handles
-      // mixed casing and does not silently miss matches after the first page.
+      const normalized = normalizeSearchText(term);
+      const gram = normalized.slice(0, Math.min(3, normalized.length));
       stage = "recipient-search";
       const recipients = [];
       let cursor;
-      while (recipients.length < 8) {
-        let query = db.collection("users").orderBy(field).limit(100);
+      let scanned = 0;
+      while (recipients.length < 8 && scanned < 500) {
+        let query = db.collection("userRecipientSearch")
+          .where("tokens", "array-contains", gram)
+          .limit(100);
         if (cursor) query = query.startAfter(cursor);
         let page;
         try {
@@ -166,41 +181,56 @@ export const searchEventTransferRecipients = onCall(
         } catch (error) {
           logger.error("Recipient profile query failed", {
             stage,
-            field,
-            uid: request.auth.uid,
-            error: error instanceof Error ? error.message : String(error),
+            errorCode: error?.code || "unknown",
           });
           throw new HttpsError(
             "internal",
-            `Falha ao consultar perfis pelo campo “${field}”. Verifique os logs da função no Firebase Console.`,
-            { stage, field },
+            "Falha ao consultar o índice de destinatários. Verifique os logs da função no Firebase Console.",
+            { stage },
           );
         }
         if (page.empty) break;
-        for (const candidate of page.docs) {
-          cursor = candidate;
-          const value = candidate.get(field);
-          if (candidate.id === request.auth.uid || candidate.get("active") === false ||
-              typeof value !== "string" || !value.trim().toLowerCase().startsWith(normalized))
-            continue;
-          recipients.push({
-            id: candidate.id,
-            name: typeof candidate.get("name") === "string" ? candidate.get("name") : "",
-            email: typeof candidate.get("email") === "string" ? candidate.get("email") : "",
-          });
+        scanned += page.size;
+        cursor = page.docs.at(-1);
+        const profiles = await Promise.all(
+          page.docs.map((candidate) => candidate.id === request.auth.uid
+            ? Promise.resolve(null)
+            : db.doc(`users/${candidate.id}`).get()),
+        );
+        for (let index = 0; index < page.docs.length; index += 1) {
+          const profileSnap = profiles[index];
+          if (!profileSnap?.exists) continue;
+          const profile = profileSnap.data();
+          if (!recipientMatches(profile, profileSnap.id, request.auth.uid, normalized)) continue;
+          recipients.push(makeRecipient(profile, profileSnap.id));
           if (recipients.length === 8) break;
         }
         if (page.size < 100) break;
+      }
+      logger.info("Recipient search completed", {
+        stage,
+        resultCount: recipients.length,
+        scanned,
+        termLength: normalized.length,
+      });
+      if (scanned >= 500 && recipients.length < 8 &&
+          !(await db.collection("userRecipientSearch")
+            .where("tokens", "array-contains", gram)
+            .startAfter(cursor)
+            .limit(1)
+            .get()).empty) {
+        throw new HttpsError(
+          "resource-exhausted",
+          "A busca encontrou muitos perfis candidatos. Digite mais caracteres para refinar.",
+          { stage: "recipient-search", reason: "query-too-broad" },
+        );
       }
       return { recipients };
     } catch (error) {
       if (error instanceof HttpsError) throw error;
       logger.error("Recipient search failed", {
         stage,
-        uid: request.auth.uid,
-        eventId: typeof request.data?.eventId === "string" ? request.data.eventId : undefined,
-        queryLength: typeof request.data?.term === "string" ? request.data.term.trim().length : undefined,
-        error: error instanceof Error ? error.message : String(error),
+        errorCode: error?.code || "unknown",
       });
       throw new HttpsError(
         "internal",

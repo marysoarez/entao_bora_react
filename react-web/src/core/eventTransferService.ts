@@ -11,14 +11,15 @@ export interface TransferSearchError extends Error {
   code?: string;
   stage?: string;
   details?: unknown;
+  customData?: { details?: unknown };
 }
 
 function transferSearchError(cause: unknown): TransferSearchError {
   const source = cause as TransferSearchError;
   const error = new Error(source?.message || "Não foi possível buscar usuários.") as TransferSearchError;
   error.code = source?.code;
-  error.details = source?.details;
-  const details = source?.details;
+  error.details = source?.details ?? source?.customData?.details;
+  const details = error.details;
   if (details && typeof details === "object" && "stage" in details && typeof details.stage === "string") {
     error.stage = details.stage;
   }

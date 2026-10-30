@@ -37,6 +37,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { SessionProvider, useSession } from "../features/session";
 import { configured } from "../core/firebase";
+import { logPageView } from "../core/analytics";
 import { watchPublic } from "../core/repository";
 import { imageSource, locate } from "../shared/domain";
 import { genres, type Event, type Place } from "../shared/models";
@@ -404,6 +405,7 @@ function Shell() {
   useEffect(() => {
     window.scrollTo(0, 0);
     setError("");
+    void logPageView(location.pathname);
   }, [location.pathname]);
   return (
     <>
