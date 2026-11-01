@@ -56,5 +56,6 @@ export function eventDocument(
     checkinCount: old?.checkinCount ?? 0,
     views: old?.views ?? 0,
     shares: old?.shares ?? 0,
+    featured: e.featured === true,
   };
 }

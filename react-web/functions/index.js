@@ -1,6 +1,15 @@
 import { onCall, HttpsError } from "firebase-functions/v2/https";
+import { onDocumentWritten } from "firebase-functions/v2/firestore";
+import { logger } from "firebase-functions";
 import { initializeApp } from "firebase-admin/app";
 import { getFirestore, FieldValue, Timestamp } from "firebase-admin/firestore";
+import {
+  canTransferEvent as hasTransferPermission,
+  makeRecipient,
+  normalizeSearchText,
+  recipientMatches,
+  searchGrams,
+} from "./transferRecipientSearch.js";
 
 initializeApp();
 const region = "southamerica-east1";
@@ -80,6 +89,157 @@ function entitlement(input) {
     ),
   };
 }
+
+export const syncUserRecipientSearchIndex = onDocumentWritten(
+  { document: "users/{uid}", region },
+  async (event) => {
+    try {
+      const after = event.data?.after;
+      const indexRef = getFirestore().doc(`userRecipientSearch/${event.params.uid}`);
+      if (!after?.exists) {
+        await indexRef.delete();
+        return;
+      }
+      const profile = after.data();
+      const validRole = ["user", "partner", "admin"].includes(profile.role);
+      const tokens = searchGrams(profile.name, profile.email);
+      if (profile.active !== true || !validRole || !tokens.length) {
+        await indexRef.delete();
+        return;
+      }
+      await indexRef.set({ tokens });
+    } catch (error) {
+      logger.error("Recipient search index sync failed", {
+        stage: "index-sync",
+        errorCode: error?.code || "unknown",
+      });
+      throw error;
+    }
+  },
+);
+
+export const searchEventTransferRecipients = onCall(
+  { region, timeoutSeconds: 30 },
+  async (request) => {
+    let stage = "authentication";
+    if (!request.auth?.uid)
+      throw new HttpsError("unauthenticated", "Autenticação obrigatória.");
+    try {
+      const db = getFirestore();
+      stage = "actor-profile";
+      const actorSnap = await db.doc(`users/${request.auth.uid}`).get();
+      if (!actorSnap.exists || actorSnap.get("active") !== true)
+        throw new HttpsError("permission-denied", "Conta ativa obrigatória.");
+      const eventId = id(request.data?.eventId, "Evento");
+      const term = request.data?.term;
+      if (typeof term !== "string" || term.trim().length < 2 || term.length > 120)
+        throw new HttpsError("invalid-argument", "Digite ao menos 2 caracteres.");
+      stage = "event";
+      const eventSnap = await db.doc(`events/${eventId}`).get();
+      if (!eventSnap.exists)
+        throw new HttpsError("not-found", "Evento não encontrado.");
+      const actor = { uid: request.auth.uid, ...actorSnap.data() };
+      stage = "transfer-permission";
+      let permitted;
+      try {
+        const eventData = eventSnap.data();
+        let place = null;
+        let membership = null;
+        if (typeof eventData.placeId === "string" && eventData.placeId.trim()) {
+          const [placeSnap, membershipSnap] = await Promise.all([
+            db.doc(`places/${eventData.placeId}`).get(),
+            db.doc(`places/${eventData.placeId}/members/${actor.uid}`).get(),
+          ]);
+          if (placeSnap.exists) place = { id: placeSnap.id, ...placeSnap.data() };
+          if (membershipSnap.exists) membership = { uid: actor.uid, placeId: eventData.placeId, ...membershipSnap.data() };
+        }
+        permitted = hasTransferPermission(actor, eventData, place, membership);
+      } catch (error) {
+        logger.error("Recipient search permission check failed", {
+          stage,
+          errorCode: error?.code || "unknown",
+        });
+        throw new HttpsError("internal", "Não foi possível validar a permissão de transferência.", { stage });
+      }
+      if (!permitted)
+        throw new HttpsError("permission-denied", "Sem permissão para transferir este evento.");
+
+      const normalized = normalizeSearchText(term);
+      const gram = normalized.slice(0, Math.min(3, normalized.length));
+      stage = "recipient-search";
+      const recipients = [];
+      let cursor;
+      let scanned = 0;
+      while (recipients.length < 8 && scanned < 500) {
+        let query = db.collection("userRecipientSearch")
+          .where("tokens", "array-contains", gram)
+          .limit(100);
+        if (cursor) query = query.startAfter(cursor);
+        let page;
+        try {
+          page = await query.get();
+        } catch (error) {
+          logger.error("Recipient profile query failed", {
+            stage,
+            errorCode: error?.code || "unknown",
+          });
+          throw new HttpsError(
+            "internal",
+            "Falha ao consultar o índice de destinatários. Verifique os logs da função no Firebase Console.",
+            { stage },
+          );
+        }
+        if (page.empty) break;
+        scanned += page.size;
+        cursor = page.docs.at(-1);
+        const profiles = await Promise.all(
+          page.docs.map((candidate) => candidate.id === request.auth.uid
+            ? Promise.resolve(null)
+            : db.doc(`users/${candidate.id}`).get()),
+        );
+        for (let index = 0; index < page.docs.length; index += 1) {
+          const profileSnap = profiles[index];
+          if (!profileSnap?.exists) continue;
+          const profile = profileSnap.data();
+          if (!recipientMatches(profile, profileSnap.id, request.auth.uid, normalized)) continue;
+          recipients.push(makeRecipient(profile, profileSnap.id));
+          if (recipients.length === 8) break;
+        }
+        if (page.size < 100) break;
+      }
+      logger.info("Recipient search completed", {
+        stage,
+        resultCount: recipients.length,
+        scanned,
+        termLength: normalized.length,
+      });
+      if (scanned >= 500 && recipients.length < 8 &&
+          !(await db.collection("userRecipientSearch")
+            .where("tokens", "array-contains", gram)
+            .startAfter(cursor)
+            .limit(1)
+            .get()).empty) {
+        throw new HttpsError(
+          "resource-exhausted",
+          "A busca encontrou muitos perfis candidatos. Digite mais caracteres para refinar.",
+          { stage: "recipient-search", reason: "query-too-broad" },
+        );
+      }
+      return { recipients };
+    } catch (error) {
+      if (error instanceof HttpsError) throw error;
+      logger.error("Recipient search failed", {
+        stage,
+        errorCode: error?.code || "unknown",
+      });
+      throw new HttpsError(
+        "internal",
+        `A busca de destinatários falhou na etapa “${stage}”. Verifique os logs da função no Firebase Console.`,
+        { stage },
+      );
+    }
+  },
+);
 
 export const adminUpdatePlaceEntitlements = onCall(
   { region },

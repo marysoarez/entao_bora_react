@@ -2,6 +2,10 @@
   "name": "entao-bora-functions",
   "private": true,
   "main": "index.js",
+  "scripts": {
+    "test": "node --test transferRecipientSearch.test.js",
+    "backfill:user-search": "node scripts/backfill-user-search.js"
+  },
   "type": "module",
   "engines": {
     "node": "22"

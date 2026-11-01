@@ -111,6 +111,7 @@ export function parseEvent(id: string, d: Data): Event {
     checkinCount: d.checkinCount ?? 0,
     views: d.views ?? 0,
     shares: d.shares ?? 0,
+    featured: d.featured === true,
   } as Event;
 }
 export function distanceInMeters(

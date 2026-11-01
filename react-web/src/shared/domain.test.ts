@@ -25,6 +25,8 @@ describe("compatibilidade dos contratos", () => {
     expect(e.startDate.toISOString()).toBe("2026-09-09T21:00:00.000Z");
     expect(e.status).toBe("draft");
     expect(e.boraCount).toBe(0);
+    expect(e.featured).toBe(false);
+    expect(parseEvent("featured", { featured: true }).featured).toBe(true);
   });
   it("normaliza proprietário, categoria e gêneros desconhecidos", () => {
     const p = parsePlace("p", {
