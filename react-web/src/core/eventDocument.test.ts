@@ -22,7 +22,7 @@ describe("contrato Flutter do evento", () => {
     }).slug).toBe("link-publicado");
   });
   it("persiste somente campos canônicos e Timestamp, com capa Base64", () => {
-    const data = eventDocument(event(), "uid");
+    const data = eventDocument({ ...event(), createdBy: "forged" }, "uid");
     expect(data).toMatchObject({
       title: "Então Bora: Rock & Blues!",
       description: "Show",
@@ -80,7 +80,7 @@ describe("contrato Flutter do evento", () => {
     });
     expect(data).toMatchObject({
       createdAt,
-      createdBy: "author",
+      createdBy: { id: "author" },
       status: "cancelled",
       views: 99,
       gallery: ["old-cover"],

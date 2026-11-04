@@ -1,5 +1,5 @@
 import { Timestamp } from "firebase/firestore";
-import { normalizeSlug, referenceId } from "../shared/domain";
+import { normalizeSlug } from "../shared/domain";
 import type { Event } from "../shared/models";
 
 // Explicit fields keep legacy/user-interaction properties out of Firestore writes.
@@ -48,7 +48,7 @@ export function eventDocument(
       ticketUrl: e.ticket.type === "free" ? null : e.ticket.ticketUrl,
     },
     instagram: e.instagram?.trim() || null,
-    createdBy: old ? referenceId(old.createdBy) : userId,
+    createdBy: old ? old.createdBy : userId,
     createdAt: old ? old.createdAt : now,
     updatedAt: now,
     status: old ? (old.status ?? "draft") : "published",

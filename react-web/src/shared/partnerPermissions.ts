@@ -1,4 +1,5 @@
-import type { Event, Place, User } from "./models";
+import type { Place, User } from "./models";
+export { canEditEvent as allowsEvent } from "./eventPermissions";
 
 export type PlaceMemberRole = "owner" | "manager" | "employee";
 export interface PlaceMembership {
@@ -13,7 +14,6 @@ export type PartnerPermission =
   | "editPlace"
   | "editMenu"
   | "manageEvents"
-  | "transferEvents"
   | "manageModules"
   | "manageServiceSessions"
   | "manageOrders"
@@ -31,7 +31,6 @@ export const PartnerPermissions: Record<
     "editPlace",
     "editMenu",
     "manageEvents",
-    "transferEvents",
     "manageModules",
     "manageServiceSessions",
     "manageOrders",
@@ -92,20 +91,4 @@ export function allowsPlace(
 ) {
   const role = placeRole(user, place, membership);
   return !!role && PartnerPermissions[role].includes(permission);
-}
-export function allowsEvent(
-  user: User | null,
-  event: Pick<Event, "createdBy" | "placeId">,
-  place: Place | null,
-  membership: PlaceMembership | null,
-  permission: "manageEvents" | "transferEvents" = "manageEvents",
-) {
-  if (!user?.active) return false;
-  if (isPlatformAdmin(user)) return true;
-  if (place && allowsPlace(user, place, membership, permission)) return true;
-  if (membership) return false;
-  return (
-    legacyResponsible(user, event.createdBy) &&
-    (permission === "manageEvents" || canCreatePlace(user))
-  );
 }

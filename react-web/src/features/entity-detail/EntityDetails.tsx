@@ -1,5 +1,6 @@
 import { PublicMenu } from "../menu-management/PublicMenu";
 import { usePartnerAccess } from "../partner-access/PartnerAccess";
+import { canEditEvent } from "../../shared/eventPermissions";
 import { useEffect, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { MapPin, CalendarDays, Share2, Heart, Check } from "lucide-react";
@@ -331,7 +332,7 @@ export function EntityDetails({ kind }: { kind: "events" | "places" }) {
             <Share2 size={16} />
             Compartilhar
           </Button>
-          {(event ? access.canEvent(event) : access.can(entity.id, "editPlace")) && (
+          {(event ? canEditEvent(user, event) : access.can(entity.id, "editPlace")) && (
             <Link to={`/${event ? "events" : "places"}/${entity.id}/edit`}>
               Editar informações
             </Link>

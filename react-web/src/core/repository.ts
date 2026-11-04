@@ -17,7 +17,7 @@ import {
   GeoPoint,
   writeBatch,
 } from "firebase/firestore";
-import { assertProductWritesEnabled, database } from "./firebase";
+import { assertProductWritesEnabled, auth, database } from "./firebase";
 import { PartnerAccessService } from "./partnerAccessService";
 import { PlaceModulesService } from "./placeModulesService";
 import { membershipRef } from "./placeMembershipService";
@@ -177,32 +177,15 @@ export async function owned(
   kind: "events" | "places",
   u: User,
 ): Promise<(Event | Place)[]> {
-  if (!u.active) return [];
-  const access = await PartnerAccessService.list(u);
-  if (kind === "places") return access.map((a) => a.place);
+  if (kind === "places" && !u.active) return [];
+  if (kind === "places")
+    return (await PartnerAccessService.list(u)).map((a) => a.place);
   const db = database();
-  if (isPlatformAdmin(u)) {
-    const result = await getDocs(collection(db, "events"));
-    return result.docs.map((d) => parseEvent(d.id, d.data()));
-  }
-  const ids = [
-    ...new Set([
-      u.id,
-      ...(canCreatePlace(u) && u.partnerId ? [u.partnerId] : []),
-    ]),
-  ];
-  const results = await Promise.all([
-    ...ids.flatMap((id) =>
-      ["createdBy", "createdBy.id"].map((field) =>
-        getDocs(query(collection(db, "events"), where(field, "==", id))),
-      ),
+  const results = await Promise.all(
+    ["createdBy", "createdBy.id"].map((field) =>
+      getDocs(query(collection(db, "events"), where(field, "==", u.id))),
     ),
-    ...access.map((a) =>
-      getDocs(
-        query(collection(db, "events"), where("placeId", "==", a.place.id)),
-      ),
-    ),
-  ]);
+  );
   const docs = new Map(results.flatMap((s) => s.docs).map((d) => [d.id, d]));
   return [...docs.values()].map((d) => parseEvent(d.id, d.data()));
 }
@@ -214,8 +197,13 @@ export async function saveEntity(
   assertProductWritesEnabled(
     kind === "events" ? "Gravação de evento" : "Gravação de estabelecimento",
   );
+  const eventCreatorId =
+    kind === "events" ? authenticatedEventUserId(user) : user.id;
   const db = database();
-  if (!user.active || (kind === "places" && !value.id && !canCreatePlace(user)))
+  if (
+    kind === "places" &&
+    (!user.active || (!value.id && !canCreatePlace(user)))
+  )
     throw Error("Sem permissão para salvar.");
   if (kind === "events") {
     value = {
@@ -258,21 +246,22 @@ export async function saveEntity(
     const old = await tx.get(ref);
     if (value.id && !old.exists()) throw Error("Registro não encontrado.");
     if (old.exists()) {
-      const allowed =
-        kind === "events"
-          ? await PartnerAccessService.canEvent(
-              user,
-              parseEvent(old.id, old.data()),
-              "manageEvents",
-              tx,
-            )
-          : await PartnerAccessService.canPlace(
-              user,
-              parsePlace(old.id, old.data()),
-              "editPlace",
-              tx,
-            );
-      if (!allowed) throw Error("Você não pode editar este registro.");
+      if (kind === "events") {
+        const previousEvent = parseEvent(old.id, old.data());
+        const nextEvent = value as Event;
+        if (previousEvent.createdBy !== eventCreatorId)
+          throw Error("Você não pode editar este registro.");
+        if (nextEvent.createdBy !== previousEvent.createdBy)
+          throw Error("A autoria do evento não pode ser alterada.");
+      } else if (
+        !(await PartnerAccessService.canPlace(
+          user,
+          parsePlace(old.id, old.data()),
+          "editPlace",
+          tx,
+        ))
+      )
+        throw Error("Você não pode editar este registro.");
     }
     if (kind === "events") {
       const next = value as Event;
@@ -284,11 +273,6 @@ export async function saveEntity(
         next.featured !== (previousEvent?.featured ?? false)
       )
         throw Error("Somente administradores podem alterar o destaque.");
-      const previousPlace = old.exists()
-        ? parseEvent(old.id, old.data()).placeId
-        : null;
-      if (next.placeId && next.placeId !== previousPlace)
-        await PartnerAccessService.assertLink(user, next.placeId, tx);
     }
     const { id, ...payload } = value;
     void id;
@@ -296,7 +280,7 @@ export async function saveEntity(
     if (kind === "events") {
       data = eventDocument(
         value as Event,
-        user.id,
+        eventCreatorId,
         old.exists() ? old.data() : undefined,
       );
     } else {
@@ -327,12 +311,20 @@ export async function saveEntity(
   });
   return ref.id;
 }
+function authenticatedEventUserId(user: User) {
+  const uid = auth?.currentUser?.uid;
+  if (!uid) throw Error("Faça login para salvar um evento.");
+  if (uid !== user.id)
+    throw Error("A sessão não corresponde ao usuário informado.");
+  return uid;
+}
 export async function setFeaturedEvent(
   eventId: string,
   featured: boolean,
   user: User,
 ) {
   assertProductWritesEnabled("Destaque do evento");
+  authenticatedEventUserId(user);
   if (!isPlatformAdmin(user))
     throw Error("Somente administradores podem destacar eventos.");
   const db = database();
@@ -347,12 +339,18 @@ export async function setFeaturedEvent(
   if (featured && selected.data().status !== "published")
     throw Error("Somente eventos publicados podem ser destacados.");
   const batch = writeBatch(db);
+  let hasUpdates = false;
   for (const candidate of activeFeatured?.docs ?? []) {
-    if (candidate.id !== eventId)
+    if (candidate.id !== eventId) {
       batch.update(candidate.ref, { featured: false });
+      hasUpdates = true;
+    }
   }
-  batch.update(selectedRef, { featured });
-  await batch.commit();
+  if (selected.data().featured !== featured) {
+    batch.update(selectedRef, { featured });
+    hasUpdates = true;
+  }
+  if (hasUpdates) await batch.commit();
 }
 export async function editMenu(
   placeId: string,
@@ -381,29 +379,6 @@ export async function editMenu(
     )
       throw Error("Card?pio muito grande. Reduza as imagens.");
     tx.update(ref, next);
-  });
-}
-export async function transferEvent(id: string, targetId: string, user: User) {
-  assertProductWritesEnabled("Transferência de evento");
-  const db = database(),
-    ref = doc(db, "events", id);
-  await runTransaction(db, async (tx) => {
-    const [e, u] = await Promise.all([
-      tx.get(ref),
-      tx.get(doc(db, "users", targetId)),
-    ]);
-    if (
-      !e.exists() ||
-      !(await PartnerAccessService.canEvent(
-        user,
-        parseEvent(e.id, e.data()),
-        "transferEvents",
-        tx,
-      ))
-    )
-      throw Error("Sem permissão.");
-    if (!u.exists()) throw Error("Usuário de destino não encontrado.");
-    tx.update(ref, { createdBy: targetId, updatedAt: serverTimestamp() });
   });
 }
 export async function activity(user: User) {

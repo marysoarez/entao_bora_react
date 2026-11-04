@@ -19,17 +19,10 @@ service cloud.firestore {
           ? get(memberPath(placeId)).data.active == true && get(memberPath(placeId)).data.role in roles
           : responsible(get(/databases/$(database)/documents/places/$(placeId)).data.get('ownerId', ''))));
     }
-    function eventAccess(event, transfer) {
-      let placeId = event.get('placeId', null);
-      return active() && (profile().get('role', 'user') == 'admin' ||
-        (placeId is string && placeId != '' && placeAccess(placeId, transfer ? ['owner'] : ['owner', 'manager'])) ||
-        (!(placeId is string && placeId != '' && exists(memberPath(placeId))) &&
-          responsible(event.get('createdBy', '')) && (!transfer || profile().get('role', 'user') == 'partner')));
-    }
     function validLink(event) {
       let placeId = event.get('placeId', null);
       return placeId == null || (placeId is string && placeId != '' &&
-        exists(/databases/$(database)/documents/places/$(placeId)) && placeAccess(placeId, ['owner', 'manager']));
+        exists(/databases/$(database)/documents/places/$(placeId)));
     }
     function menuEnabled(placeId) {
       let path = /databases/$(database)/documents/places/$(placeId)/settings/modules;
@@ -646,25 +639,29 @@ service cloud.firestore {
       }
       function editEvent() {
         let changed = request.resource.data.diff(resource.data).affectedKeys();
-        let sameAuthor = referenceId(request.resource.data.createdBy) == referenceId(resource.data.createdBy);
-        return sameAuthor
-          ? eventAccess(resource.data, false) && unchangedMetrics() &&
-            (!changed.hasAny(['featured']) || admin() ||
-              (resource.data.get('featured', false) == false && request.resource.data.get('featured', false) == false)) &&
-            request.resource.data.get('createdAt', null) == resource.data.get('createdAt', null) &&
-            (request.resource.data.get('placeId', null) == resource.data.get('placeId', null) || validLink(request.resource.data))
-          : changed.hasOnly(['createdBy', 'updatedAt']) && eventAccess(resource.data, true) &&
-            request.resource.data.createdBy is string && exists(/databases/$(database)/documents/users/$(request.resource.data.createdBy));
+        return signedIn() && referenceId(resource.data.get('createdBy', '')) == request.auth.uid &&
+          request.resource.data.get('createdBy', null) == resource.data.get('createdBy', null) &&
+          unchangedMetrics() &&
+          (!changed.hasAny(['featured']) ||
+            (request.resource.data.featured is bool &&
+              (admin() ||
+                (resource.data.get('featured', false) == false && request.resource.data.featured == false)))) &&
+          request.resource.data.get('createdAt', null) == resource.data.get('createdAt', null) &&
+          (request.resource.data.get('placeId', null) == resource.data.get('placeId', null) || validLink(request.resource.data));
       }
       function updateEvent() {
         let changed = request.resource.data.diff(resource.data).affectedKeys();
-        return changed.hasOnly(['views']) ? metric('views') :
+        return changed.hasAny(['featured']) && changed.hasOnly(['featured'])
+          ? admin() && request.resource.data.featured is bool :
+          changed.hasOnly(['views']) ? metric('views') :
           changed.hasOnly(['shares']) ? metric('shares') :
           changed.hasOnly(['boraCount']) ? boraCounter() :
           changed.hasOnly(['checkinCount']) ? checkinCounter() : editEvent();
       }
       allow read: if true;
-      allow create: if active() && request.resource.data.createdBy == request.auth.uid && validLink(request.resource.data) &&
+      allow create: if signedIn() && request.resource.data.createdBy is string &&
+        request.resource.data.createdBy == request.auth.uid && validLink(request.resource.data) &&
+        request.resource.data.get('featured', false) is bool &&
         (request.resource.data.get('featured', false) == false || admin()) &&
         request.resource.data.get('boraCount', 0) == 0 && request.resource.data.get('checkinCount', 0) == 0 &&
         request.resource.data.get('views', 0) == 0 && request.resource.data.get('shares', 0) == 0;

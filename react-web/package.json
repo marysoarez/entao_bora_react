@@ -36,6 +36,7 @@
     "@types/react": "19.2.14",
     "@types/react-dom": "19.2.3",
     "@vitejs/plugin-react": "6.0.2",
+    "happy-dom": "^21.0.4",
     "oxlint": "1.76.0",
     "oxlint-tsgolint": "^7.0.2002",
     "prettier": "^3.6.2",

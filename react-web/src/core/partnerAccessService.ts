@@ -1,7 +1,5 @@
 import {
   collection,
-  doc,
-  getDoc,
   getDocs,
   type Transaction,
 } from "firebase/firestore";
@@ -56,34 +54,7 @@ export const PartnerAccessService = {
   async canEvent(
     user: User,
     event: Event,
-    permission: "manageEvents" | "transferEvents" = "manageEvents",
-    tx?: Transaction,
   ) {
-    if (!user.active) return false;
-    if (isPlatformAdmin(user)) return true;
-    let place: Place | null = null;
-    let membership: PlaceMembership | null = null;
-    if (event.placeId) {
-      const ref = doc(database(), "places", event.placeId);
-      const snap = await (tx ? tx.get(ref) : getDoc(ref));
-      place = snap.exists() ? parsePlace(snap.id, snap.data()) : null;
-      membership = await PlaceMembershipService.get(event.placeId, user.id, tx);
-    }
-    return allowsEvent(user, event, place, membership, permission);
-  },
-  async assertLink(user: User, placeId: string, tx: Transaction) {
-    const snap = await tx.get(doc(database(), "places", placeId));
-    if (
-      !snap.exists() ||
-      !(await this.canPlace(
-        user,
-        parsePlace(snap.id, snap.data()),
-        "manageEvents",
-        tx,
-      ))
-    )
-      throw Error(
-        "Sem permissão para vincular eventos a este estabelecimento.",
-      );
+    return allowsEvent(user, event);
   },
 };

@@ -22,14 +22,12 @@ const member = (role: PlaceMemberRole, active = true): PlaceMembership => ({
 describe("permissões do estabelecimento", () => {
   it.each<[PlaceMemberRole, PartnerPermission, boolean]>([
     ["owner", "manageMembers", true],
-    ["owner", "transferEvents", true],
     ["owner", "manageCampaigns", true],
     ["manager", "manageEvents", true],
     ["manager", "editMenu", true],
     ["manager", "editPlace", true],
     ["manager", "manageMembers", false],
     ["manager", "manageCampaigns", false],
-    ["manager", "transferEvents", false],
     ["employee", "view", true],
     ["employee", "editMenu", false],
     ["employee", "editPlace", false],
@@ -104,30 +102,21 @@ describe("permissões do estabelecimento", () => {
     expect(canCreatePlace(user)).toBe(false);
     expect(canCreatePlace(parseUser("admin", { role: "admin" }))).toBe(true);
   });
-  it("gestão de evento usa vínculo, mantém autor avulso e bloqueia funcionário autor", () => {
+  it("edição de evento depende exclusivamente do criador", () => {
     const event = parseEvent("event", {
       createdBy: "someone",
       placeId: place.id,
     });
-    expect(allowsEvent(user, event, place, member("manager"))).toBe(true);
+    expect(allowsEvent(user, event)).toBe(false);
+    expect(allowsEvent(user, { ...event, createdBy: user.id })).toBe(true);
+    expect(allowsEvent(parseUser("admin", { role: "admin" }), event)).toBe(
+      false,
+    );
     expect(
-      allowsEvent(user, event, place, member("manager"), "transferEvents"),
-    ).toBe(false);
-    expect(
-      allowsEvent(
-        user,
-        { ...event, createdBy: user.id },
-        place,
-        member("employee"),
-      ),
-    ).toBe(false);
-    expect(
-      allowsEvent(
-        user,
-        { ...event, createdBy: user.id, placeId: null },
-        null,
-        null,
-      ),
+      allowsEvent(parseUser(user.id, { active: false }), {
+        ...event,
+        createdBy: user.id,
+      }),
     ).toBe(true);
   });
 });
