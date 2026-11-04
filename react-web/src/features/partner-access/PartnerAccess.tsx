@@ -32,7 +32,6 @@ const Context = createContext({
   can: (_placeId: string, _permission: PartnerPermission): boolean => false,
   canEvent: (
     _event: Event,
-    _permission?: "manageEvents" | "transferEvents",
   ): boolean => false,
 });
 export const usePartnerAccess = () => useContext(Context);
@@ -142,19 +141,7 @@ export function PartnerAccessProvider({ children }: { children: ReactNode }) {
             allowsPlace(user, entry.place, entry.membership, permission)
           );
         },
-        canEvent: (event, permission = "manageEvents") => {
-          const entry = entries.find((e) => e.place.id === event.placeId);
-          return (
-            ready &&
-            allowsEvent(
-              user,
-              event,
-              entry?.place ?? null,
-              entry?.membership ?? null,
-              permission,
-            )
-          );
-        },
+        canEvent: (event) => allowsEvent(user, event),
       }}
     >
       {children}

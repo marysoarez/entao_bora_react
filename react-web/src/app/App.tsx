@@ -351,10 +351,12 @@ function Home() {
 function Guard({
   partner = false,
   admin = false,
+  requireActive = true,
   children,
 }: {
   partner?: boolean;
   admin?: boolean;
+  requireActive?: boolean;
   children: ReactNode;
 }) {
   const { user, loading, login } = useSession();
@@ -376,7 +378,7 @@ function Guard({
   if (partner && access.loading)
     return <Message>Carregando permiss?es?</Message>;
   if (partner && access.error) return <Message>{access.error}</Message>;
-  if (!user.active || (partner && !access.canEnter))
+  if ((requireActive && !user.active) || (partner && !access.canEnter))
     return (
       <Message>
         Esta área está disponível para{" "}
@@ -477,7 +479,7 @@ function Shell() {
           <Route
             path="/events/create"
             element={
-              <Guard>
+              <Guard requireActive={false}>
                 <EventEditorPage />
               </Guard>
             }
@@ -485,7 +487,7 @@ function Shell() {
           <Route
             path="/events/:id/edit"
             element={
-              <Guard>
+              <Guard requireActive={false}>
                 <EventEditorPage />
               </Guard>
             }

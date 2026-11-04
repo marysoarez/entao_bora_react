@@ -1,13 +1,18 @@
 import { beforeEach, expect, it, vi } from "vitest";
 import { parseEvent, parseUser } from "../shared/domain";
 const mocks = vi.hoisted(() => ({
+  auth: { currentUser: { uid: "uid" } },
   getDocs: vi.fn(),
   getDoc: vi.fn(),
   get: vi.fn(),
   set: vi.fn(),
   update: vi.fn(),
+  writeBatch: vi.fn(),
+  batchUpdate: vi.fn(),
+  batchCommit: vi.fn(),
 }));
 vi.mock("./firebase", () => ({
+  auth: mocks.auth,
   database: () => ({}),
   assertProductWritesEnabled: vi.fn(),
 }));
@@ -24,8 +29,15 @@ vi.mock("firebase/firestore", async (original) => ({
   getDoc: mocks.getDoc,
   runTransaction: (_db: unknown, callback: (tx: unknown) => unknown) =>
     callback({ get: mocks.get, set: mocks.set, update: mocks.update }),
+  writeBatch: mocks.writeBatch,
 }));
-import { checkIn, owned, saveEntity, resolvePublicEntity } from "./repository";
+import {
+  checkIn,
+  owned,
+  saveEntity,
+  resolvePublicEntity,
+  setFeaturedEvent,
+} from "./repository";
 import { PlaceModulesService } from "./placeModulesService";
 import { PartnerAccessService } from "./partnerAccessService";
 const user = parseUser("uid", { partnerId: "partner", role: "partner" });
@@ -34,6 +46,7 @@ const event = () =>
     title: " Show ",
     description: " Descrição ",
     coverImage: "Y292ZXI=",
+    createdBy: "uid",
     startDate: new Date("2026-10-10T20:00:00Z"),
     endDate: new Date("2026-10-10T20:00:00Z"),
     address: { displayName: "Local", latitude: -22, longitude: -43 },
@@ -41,9 +54,14 @@ const event = () =>
 beforeEach(() => {
   vi.restoreAllMocks();
   vi.clearAllMocks();
+  mocks.auth.currentUser.uid = "uid";
   mocks.getDocs.mockResolvedValue({ docs: [] });
   mocks.getDoc.mockResolvedValue({ exists: () => false });
   mocks.get.mockResolvedValue({ exists: () => false });
+  mocks.writeBatch.mockReturnValue({
+    update: mocks.batchUpdate,
+    commit: mocks.batchCommit,
+  });
 });
 it("publicação de Evento não depende de configuração de módulos ou cobrança", async () => {
   const settings = vi
@@ -58,7 +76,7 @@ it("edição mantém ID, slug, vínculo e métricas sem consultar módulos", asy
   const settings = vi
     .spyOn(PlaceModulesService, "get")
     .mockRejectedValue(Error("settings unavailable"));
-  vi.spyOn(PartnerAccessService, "canEvent").mockResolvedValue(true);
+  const canEvent = vi.spyOn(PartnerAccessService, "canEvent");
   mocks.get.mockResolvedValue({
     id: "existing",
     exists: () => true,
@@ -97,6 +115,7 @@ it("edição mantém ID, slug, vínculo e métricas sem consultar módulos", asy
     shares: 3,
   });
   expect(settings).not.toHaveBeenCalled();
+  expect(canEvent).not.toHaveBeenCalled();
 });
 it("link público por slug resolve ID real do evento sem módulos", async () => {
   mocks.getDocs.mockResolvedValue({
@@ -134,6 +153,51 @@ it("publica com ID automático após conferir slug derivado do título", async (
     createdBy: "uid",
   });
 });
+it("permite que usuário ativo comum publique evento sem local", async () => {
+  const regularUser = parseUser("regular-user", { role: "user" });
+  mocks.auth.currentUser.uid = "regular-user";
+
+  await expect(saveEntity("events", event(), regularUser)).resolves.toBe(
+    "generated-id",
+  );
+  expect(mocks.set.mock.calls[0][1]).toMatchObject({
+    createdBy: "regular-user",
+    placeId: null,
+    featured: false,
+  });
+});
+it("permite publicar em estabelecimento existente sem manageEvents", async () => {
+  const regularUser = parseUser("regular-user", { role: "user" });
+  mocks.auth.currentUser.uid = "regular-user";
+  const canPlace = vi.spyOn(PartnerAccessService, "canPlace");
+  await expect(
+    saveEntity(
+      "events",
+      { ...event(), placeId: "existing-place" },
+      regularUser,
+    ),
+  ).resolves.toBe("generated-id");
+  expect(mocks.set.mock.calls[0][1]).toMatchObject({
+    createdBy: "regular-user",
+    placeId: "existing-place",
+  });
+  expect(canPlace).not.toHaveBeenCalled();
+});
+it("rejeita criação quando o ID informado não corresponde à sessão Firebase", async () => {
+  const forgedUser = parseUser("someone-else", { role: "user" });
+  mocks.auth.currentUser.uid = "authenticated-user";
+  await expect(saveEntity("events", event(), forgedUser)).rejects.toThrow(
+    "A sessão não corresponde ao usuário informado.",
+  );
+  expect(mocks.set).not.toHaveBeenCalled();
+});
+it("rejeita criação sem usuário Firebase autenticado", async () => {
+  mocks.auth.currentUser.uid = "";
+  await expect(saveEntity("events", event(), user)).rejects.toThrow(
+    "Faça login para salvar um evento.",
+  );
+  expect(mocks.set).not.toHaveBeenCalled();
+});
 it("bloqueia slug duplicado antes da escrita", async () => {
   mocks.getDocs.mockResolvedValue({ docs: [{ id: "another" }] });
   await expect(saveEntity("events", event(), user)).rejects.toThrow(
@@ -156,6 +220,50 @@ it("edita com update e preserva contadores atuais da transação", async () => {
   await saveEntity("events", { ...event(), id: "existing", views: 1 }, user);
   expect(mocks.update.mock.calls[0][1].views).toBe(42);
   expect(mocks.set).not.toHaveBeenCalled();
+});
+it("nega edição por admin de evento de terceiros no repositório", async () => {
+  const admin = parseUser("admin", { role: "admin" });
+  mocks.auth.currentUser.uid = "admin";
+  mocks.get.mockResolvedValue({
+    id: "third-party",
+    exists: () => true,
+    data: () => ({
+      createdBy: "someone-else",
+      createdAt: event().createdAt,
+      status: "published",
+    }),
+  });
+  await expect(
+    saveEntity(
+      "events",
+      {
+        ...event(),
+        id: "third-party",
+        createdBy: "someone-else",
+      },
+      admin,
+    ),
+  ).rejects.toThrow("Você não pode editar");
+  expect(mocks.update).not.toHaveBeenCalled();
+});
+it("nega tentativa do criador de alterar createdBy no repositório", async () => {
+  mocks.get.mockResolvedValue({
+    id: "existing",
+    exists: () => true,
+    data: () => ({
+      createdBy: "uid",
+      createdAt: event().createdAt,
+      status: "published",
+    }),
+  });
+  await expect(
+    saveEntity(
+      "events",
+      { ...event(), id: "existing", createdBy: "target" },
+      user,
+    ),
+  ).rejects.toThrow("A autoria do evento não pode ser alterada");
+  expect(mocks.update).not.toHaveBeenCalled();
 });
 it("bloqueia alteração de destaque por parceiro antes de gravar", async () => {
   vi.spyOn(PartnerAccessService, "canEvent").mockResolvedValue(true);
@@ -181,6 +289,64 @@ it("propaga erro de gravação sem retornar sucesso", async () => {
   await expect(saveEntity("events", event(), user)).rejects.toThrow(
     "permission-denied",
   );
+});
+it("ao destacar evento já salvo, atualiza somente os destaques anteriores", async () => {
+  mocks.auth.currentUser.uid = "admin";
+  const previous = { id: "previous", ref: { id: "previous" } };
+  mocks.getDoc.mockResolvedValue({
+    exists: () => true,
+    data: () => ({ status: "published", featured: true }),
+  });
+  mocks.getDocs.mockResolvedValue({ docs: [previous] });
+
+  await setFeaturedEvent(
+    "selected",
+    true,
+    parseUser("admin", { role: "admin" }),
+  );
+
+  expect(mocks.batchUpdate).toHaveBeenCalledTimes(1);
+  expect(mocks.batchUpdate).toHaveBeenCalledWith(previous.ref, {
+    featured: false,
+  });
+  expect(mocks.batchCommit).toHaveBeenCalledTimes(1);
+});
+it("não faz batch redundante quando não há outro evento em destaque", async () => {
+  mocks.auth.currentUser.uid = "admin";
+  mocks.getDoc.mockResolvedValue({
+    exists: () => true,
+    data: () => ({ status: "published", featured: true }),
+  });
+  mocks.getDocs.mockResolvedValue({ docs: [] });
+
+  await setFeaturedEvent(
+    "selected",
+    true,
+    parseUser("admin", { role: "admin" }),
+  );
+
+  expect(mocks.batchUpdate).not.toHaveBeenCalled();
+  expect(mocks.batchCommit).not.toHaveBeenCalled();
+});
+it("permite ao admin destacar evento de outra pessoa sem editar seu conteúdo", async () => {
+  mocks.auth.currentUser.uid = "admin";
+  const selectedRef = { id: "selected" };
+  mocks.getDoc.mockResolvedValue({
+    exists: () => true,
+    data: () => ({ status: "published", featured: false }),
+  });
+  mocks.getDocs.mockResolvedValue({ docs: [] });
+
+  await setFeaturedEvent(
+    "selected",
+    true,
+    parseUser("admin", { role: "admin" }),
+  );
+
+  expect(mocks.batchUpdate).toHaveBeenCalledWith(selectedRef, {
+    featured: true,
+  });
+  expect(mocks.batchCommit).toHaveBeenCalledOnce();
 });
 it("bloqueia documento grande antes de gravar", async () => {
   await expect(
@@ -219,4 +385,100 @@ it("check-in legado de Evento continua idempotente", async () => {
   await checkIn("event", user, { latitude: -22, longitude: -43 });
   expect(mocks.set).not.toHaveBeenCalled();
   expect(mocks.update).not.toHaveBeenCalled();
+});
+
+it.each(["user", "partner", "admin"])(
+  "%s cria e edita somente eventos próprios",
+  async (role) => {
+    const actor = parseUser("uid", { role });
+    await saveEntity("events", { ...event(), createdBy: "forged" }, actor);
+    expect(mocks.set.mock.calls[0][1].createdBy).toBe("uid");
+    mocks.get.mockResolvedValue({
+      id: "existing",
+      exists: () => true,
+      data: () => ({ ...event(), createdBy: "uid" }),
+    });
+    await expect(
+      saveEntity("events", { ...event(), id: "existing" }, actor),
+    ).resolves.toBe("existing");
+    mocks.update.mockClear();
+    mocks.get.mockResolvedValue({
+      id: "existing",
+      exists: () => true,
+      data: () => ({ ...event(), createdBy: "other" }),
+    });
+    await expect(
+      saveEntity(
+        "events",
+        { ...event(), id: "existing", createdBy: "other" },
+        actor,
+      ),
+    ).rejects.toThrow("Você não pode editar");
+    expect(mocks.update).not.toHaveBeenCalled();
+  },
+);
+
+it("autenticação basta para autoria, sem exigir perfil ativo de parceiro", async () => {
+  const actor = parseUser("uid", { active: false, role: "user" });
+  await expect(saveEntity("events", event(), actor)).resolves.toBe(
+    "generated-id",
+  );
+  mocks.get.mockResolvedValue({
+    id: "existing",
+    exists: () => true,
+    data: () => event(),
+  });
+  await expect(
+    saveEntity("events", { ...event(), id: "existing" }, actor),
+  ).resolves.toBe("existing");
+});
+
+it("edição de evento legado preserva createdBy como objeto e campos desconhecidos", async () => {
+  mocks.get.mockResolvedValue({
+    id: "existing",
+    exists: () => true,
+    data: () => ({
+      ...event(),
+      createdBy: { id: "uid", name: "Original" },
+      legacy: "keep",
+    }),
+  });
+  await saveEntity("events", { ...event(), id: "existing" }, user);
+  expect(mocks.update.mock.calls[0][1].createdBy).toEqual({
+    id: "uid",
+    name: "Original",
+  });
+  expect(mocks.update.mock.calls[0][1]).not.toHaveProperty("legacy");
+  expect(mocks.set).not.toHaveBeenCalled();
+});
+
+it("criador comum preserva destaque existente ao editar o conteúdo", async () => {
+  mocks.get.mockResolvedValue({
+    id: "existing",
+    exists: () => true,
+    data: () => ({ ...event(), featured: true }),
+  });
+  await saveEntity(
+    "events",
+    { ...event(), id: "existing", featured: true },
+    user,
+  );
+  expect(mocks.update.mock.calls[0][1].featured).toBe(true);
+  await expect(
+    saveEntity("events", { ...event(), id: "existing", featured: false }, user),
+  ).rejects.toThrow("Somente administradores");
+});
+
+it("destaque exige sessão correspondente e papel de administrador", async () => {
+  await expect(setFeaturedEvent("e", true, user)).rejects.toThrow(
+    "Somente administradores",
+  );
+  await expect(
+    setFeaturedEvent("e", true, parseUser("forged", { role: "admin" })),
+  ).rejects.toThrow("A sessão não corresponde");
+  mocks.auth.currentUser.uid = "";
+  await expect(
+    setFeaturedEvent("e", true, parseUser("uid", { role: "admin" })),
+  ).rejects.toThrow("Faça login");
+  expect(mocks.batchCommit).not.toHaveBeenCalled();
 });

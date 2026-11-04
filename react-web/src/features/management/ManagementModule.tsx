@@ -1,4 +1,5 @@
 import { PartnerAccessService } from "../../core/partnerAccessService";
+import { canEditEvent } from "../../shared/eventPermissions";
 import { usePartnerAccess } from "../partner-access/PartnerAccess";
 import { useEffect, useState, type FormEvent } from "react";
 import {
@@ -17,7 +18,6 @@ import {
   owned,
   resolvePublicEntity,
   saveEntity,
-  transferEvent,
 } from "../../core/repository";
 import {
   formatDate,
@@ -76,7 +76,7 @@ export function Editor({ kind }: { kind: "events" | "places" }) {
           const allowed =
             user &&
             (kind === "events"
-              ? await PartnerAccessService.canEvent(user, v as Event)
+              ? canEditEvent(user, v as Event)
               : await PartnerAccessService.canPlace(
                   user,
                   v as Place,
@@ -120,7 +120,7 @@ export function Editor({ kind }: { kind: "events" | "places" }) {
       setBusy(false);
     }
   }
-  if (loading || access.loading)
+  if (loading || (kind === "places" && access.loading))
     return <Message>Carregando formulário…</Message>;
   if (
     kind === "places" &&
@@ -616,10 +616,7 @@ export function Management({ dashboard = false }: { dashboard?: boolean }) {
     [events, setEvents] = useState<Event[]>([]),
     [error, setError] = useState(""),
     [loading, setLoading] = useState(true),
-    [params, setParams] = useSearchParams(),
-    [target, setTarget] = useState(""),
-    [selected, setSelected] = useState(""),
-    [busy, setBusy] = useState(false);
+    [params, setParams] = useSearchParams();
   useEffect(() => {
     let alive = true;
     if (user)
@@ -705,56 +702,10 @@ export function Management({ dashboard = false }: { dashboard?: boolean }) {
               </div>
               <div className="actions">
                 <Link to={`/events/${e.id}/edit`}>Editar</Link>
-                <button
-                  onClick={() => {
-                    setSelected(e.id);
-                    setTarget("");
-                  }}
-                >
-                  Transferir
-                </button>
               </div>
             </div>
           ))}
           {!events.length && !loading && <p>Você ainda não tem eventos.</p>}
-          {selected && (
-            <form
-              onSubmit={async (e) => {
-                e.preventDefault();
-                if (!user) return;
-                setBusy(true);
-                try {
-                  await transferEvent(selected, target, user);
-                  setEvents(events.filter((e) => e.id !== selected));
-                  setSelected("");
-                } catch (e) {
-                  setError((e as Error).message);
-                } finally {
-                  setBusy(false);
-                }
-              }}
-            >
-              <Field label="ID do usuário que receberá o evento">
-                <Input
-                  required
-                  value={target}
-                  onChange={(e) => setTarget(e.target.value)}
-                />
-              </Field>
-              <p>
-                A transferência altera o responsável pelo evento e mantém o
-                estabelecimento.
-              </p>
-              <Button disabled={busy}>Confirmar transferência</Button>{" "}
-              <Button
-                type="button"
-                variant="ghost"
-                onClick={() => setSelected("")}
-              >
-                Cancelar
-              </Button>
-            </form>
-          )}
         </>
       )}
       <h2 style={{ marginTop: 32 }}>Estabelecimentos</h2>

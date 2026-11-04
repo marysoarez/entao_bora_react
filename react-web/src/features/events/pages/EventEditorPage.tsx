@@ -1,5 +1,3 @@
-import { PartnerAccessService } from "../../../core/partnerAccessService";
-import { usePartnerAccess } from "../../partner-access/PartnerAccess";
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import {
   Link,
@@ -11,9 +9,10 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
-  owned,
+  listPlaces,
   resolvePublicEntity,
   saveEntity,
+  setFeaturedEvent,
 } from "../../../core/repository";
 import { imageSource, parseEvent, validateEvent } from "../../../shared/domain";
 import {
@@ -29,7 +28,7 @@ import { AddressSearch } from "../../AddressSearch";
 import { ImageUpload } from "../../ImageUpload";
 import { refineEventAddress } from "../eventAddress";
 import { isPlatformAdmin } from "../../../shared/partnerPermissions";
-import { setFeaturedEvent } from "../../../core/repository";
+import { canEditEvent } from "../../../shared/eventPermissions";
 
 const emptyAddress = () => ({ displayName: "", latitude: NaN, longitude: NaN });
 const emptyEvent = () =>
@@ -49,7 +48,6 @@ export function EventEditorPage() {
   const [params] = useSearchParams(),
     location = useLocation(),
     navigate = useNavigate();
-  const access = usePartnerAccess();
   const requestedPlace = params.get("placeId") || location.state?.place?.id;
   const origin = location.state?.from;
   const returnTo =
@@ -60,6 +58,9 @@ export function EventEditorPage() {
       : "/";
   const [value, setValue] = useState<Event>(emptyEvent);
   const [places, setPlaces] = useState<Place[]>([]);
+  const [featureOnly, setFeatureOnly] = useState(false);
+  const contextKey = JSON.stringify([user?.id, id, requestedPlace]);
+  const [loadedContext, setLoadedContext] = useState("");
   const [mode, setMode] = useState<"registered" | "custom">("custom");
   const [selected, setSelected] = useState(false);
   const [loading, setLoading] = useState(true),
@@ -74,6 +75,11 @@ export function EventEditorPage() {
     setLoading(true);
     setError("");
     setPlacesError("");
+    setValue(emptyEvent());
+    setFeatureOnly(false);
+    setPlaces([]);
+    setMode("custom");
+    setSelected(false);
     if (!user) {
       setLoading(false);
       return;
@@ -82,10 +88,10 @@ export function EventEditorPage() {
     async function initialize() {
       try {
         const [loaded, event] = await Promise.all([
-          owned("places", currentUser).catch(() => {
+          listPlaces().catch(() => {
             if (alive)
               setPlacesError(
-                "Não foi possível carregar seus locais. Use outro endereço ou reabra o formulário.",
+                "Não foi possível carregar os estabelecimentos. Use outro endereço ou reabra o formulário.",
               );
             return [] as Place[];
           }),
@@ -93,40 +99,29 @@ export function EventEditorPage() {
         ]);
         if (!alive) return;
         if (id && !event) throw Error("Evento não encontrado.");
-        if (event && !(await PartnerAccessService.canEvent(currentUser, event)))
-          throw Error("Sem permissão para editar.");
-        const allowedPlaces = (
-          await Promise.all(
-            loaded.map(async (p) =>
-              (await PartnerAccessService.canPlace(
-                currentUser,
-                p,
-                "manageEvents",
-              ))
-                ? p
-                : null,
-            ),
-          )
-        ).filter((p): p is Place => !!p);
+        if (event && !canEditEvent(currentUser, event)) {
+          if (!isPlatformAdmin(currentUser))
+            throw Error("Sem permissão para editar.");
+          setFeatureOnly(true);
+        } else {
+          setFeatureOnly(false);
+        }
         if (!alive) return;
         if (
           !event &&
           requestedPlace &&
-          !allowedPlaces.some((p) => p.id === requestedPlace)
+          !loaded.some((p) => p.id === requestedPlace)
         )
-          throw Error(
-            "Sem permissão para criar eventos neste estabelecimento.",
-          );
-        setPlaces(allowedPlaces);
+          throw Error("Estabelecimento não encontrado.");
+        setPlaces(loaded);
         const next = event || emptyEvent();
         const place = event?.placeId
-          ? allowedPlaces.find((p) => p.id === event.placeId)
+          ? loaded.find((p) => p.id === event.placeId)
           : !event
-            ? allowedPlaces.find((p) => p.id === requestedPlace) ||
-              allowedPlaces[0]
+            ? loaded.find((p) => p.id === requestedPlace) || loaded[0]
             : undefined;
-        // Preserve an existing association if its place is no longer accessible.
-        if (place) {
+        // Preserve the association if the linked place is no longer available.
+        if (place && !event) {
           setValue({
             ...next,
             placeId: place.id,
@@ -143,14 +138,17 @@ export function EventEditorPage() {
       } catch (e) {
         if (alive) setError((e as Error).message);
       } finally {
-        if (alive) setLoading(false);
+        if (alive) {
+          setLoadedContext(contextKey);
+          setLoading(false);
+        }
       }
     }
     void initialize();
     return () => {
       alive = false;
     };
-  }, [id, user?.id, user?.partnerId, requestedPlace]);
+  }, [id, user, requestedPlace, contextKey]);
 
   const patch = (data: Partial<Event>) => setValue((v) => ({ ...v, ...data }));
   function switchMode(next: "registered" | "custom") {
@@ -171,6 +169,23 @@ export function EventEditorPage() {
     setError("");
     try {
       if (!user) throw Error("Faça login para criar um evento.");
+      if (loading || loadedContext !== contextKey)
+        throw Error("Aguarde o carregamento do evento.");
+      if (featureOnly) {
+        if (!id || !isPlatformAdmin(user))
+          throw Error("Sem permissão para alterar o destaque.");
+        await setFeaturedEvent(value.id, value.featured, user);
+        await navigate(returnTo, {
+          state: {
+            eventSuccess: value.featured
+              ? "Evento destacado na home."
+              : "Destaque removido.",
+          },
+        });
+        return;
+      }
+      if (id && !canEditEvent(user, value))
+        throw Error("Sem permissão para editar.");
       const next = {
         ...value,
         address: selected ? value.address : emptyAddress(),
@@ -181,11 +196,10 @@ export function EventEditorPage() {
         next.address = await refineEventAddress(next.address);
         next.locationName = next.address.displayName;
       }
-      if (!isPlatformAdmin(user)) next.featured = value.featured;
       const savedId = await saveEntity("events", next, user);
-      if (isPlatformAdmin(user))
+      if (isPlatformAdmin(user) && next.featured)
         await setFeaturedEvent(savedId, next.featured, user);
-      navigate(returnTo, {
+      await navigate(returnTo, {
         state: {
           eventSuccess: id
             ? "Evento atualizado com sucesso!"
@@ -200,7 +214,9 @@ export function EventEditorPage() {
     }
   }
 
-  if (loading)
+  if (!user)
+    return <Message>Faça login para criar ou editar um evento.</Message>;
+  if (loading || loadedContext !== contextKey)
     return (
       <div
         className="form event-form-skeleton"
@@ -214,19 +230,33 @@ export function EventEditorPage() {
         <i />
       </div>
     );
-  if (id && value.id && !access.loading && !access.canEvent(value))
-    return <Message>Sem permissão para editar este evento.</Message>;
-  if (
-    !id &&
-    requestedPlace &&
-    !access.loading &&
-    !access.can(requestedPlace, "manageEvents")
-  )
-    return (
-      <Message>Sem permissão para criar eventos neste estabelecimento.</Message>
-    );
   if (id && !value.id)
     return <Message>{error || "Evento indisponível."}</Message>;
+  if (featureOnly)
+    return (
+      <form className="form" onSubmit={submit}>
+        <Link to={returnTo} className="subtle">
+          ← Voltar
+        </Link>
+        <h1>Gerenciar destaque</h1>
+        <p>O conteúdo e a autoria do evento não podem ser alterados aqui.</p>
+        <label className="event-feature-toggle">
+          <input
+            type="checkbox"
+            checked={value.featured}
+            onChange={(e) => patch({ featured: e.target.checked })}
+          />
+          <span>
+            <strong>Evento de destaque na home</strong>
+            <small>Este evento será o único destaque ativo.</small>
+          </span>
+        </label>
+        {error && <Message>{error}</Message>}
+        <Button type="submit" disabled={busy}>
+          {busy ? "Salvando destaque…" : "SALVAR DESTAQUE"}
+        </Button>
+      </form>
+    );
   return (
     <form className="form" onSubmit={submit} noValidate>
       <Link to={returnTo} className="subtle">
@@ -298,7 +328,7 @@ export function EventEditorPage() {
                   checked={mode === "registered"}
                   onChange={() => switchMode("registered")}
                 />{" "}
-                Meus Locais
+                Estabelecimentos cadastrados
               </label>
               <label>
                 <input
@@ -314,7 +344,7 @@ export function EventEditorPage() {
         ) : (
           !placesError && (
             <p>
-              Você ainda não tem locais cadastrados. Selecione outro endereço
+              Nenhum estabelecimento disponível. Selecione outro endereço
               abaixo.
             </p>
           )

@@ -4,7 +4,6 @@ import {
   saveEntity,
   toggleBora,
   checkIn,
-  transferEvent,
   watchInteractions,
 } from "../../../core/repository";
 import type { Event, User } from "../../../shared/models";
@@ -16,6 +15,5 @@ export const saveEvent = (event: Event, user: User) =>
 export const toggleEventBora = toggleBora;
 export const checkIntoEvent = checkIn;
 export const incrementEventMetric = count;
-export const transferEventOwnership = transferEvent;
 export const subscribeToEventInteractions = watchInteractions;
 export { getEventPresenceContexts } from "../../../core/eventPresenceService";

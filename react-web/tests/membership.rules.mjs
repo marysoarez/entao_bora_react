@@ -9,6 +9,7 @@ import {
   collection,
   collectionGroup,
   deleteDoc,
+  deleteField,
   doc,
   getDoc,
   getDocs,
@@ -858,13 +859,20 @@ test("módulos: desativar cardápio protege escrita direta e mantém informaçõ
     }),
   );
   await assertSucceeds(
-    updateDoc(doc(db("manager"), "events/linked"), { title: "Updated event" }),
-  );
-  await assertSucceeds(
     setDoc(doc(db("manager"), "events/new-module-event"), {
       createdBy: "manager",
       placeId: "one",
       title: "New event",
+    }),
+  );
+  await assertSucceeds(
+    updateDoc(doc(db("manager"), "events/new-module-event"), {
+      title: "Updated event",
+    }),
+  );
+  await assertFails(
+    updateDoc(doc(db("manager"), "events/linked"), {
+      title: "Third-party event",
     }),
   );
   await assertSucceeds(
@@ -887,8 +895,20 @@ test("Eventos não dependem de configuração ausente, corrompida ou de pagament
     }),
   );
   await assertSucceeds(
-    updateDoc(doc(db("manager"), "events/linked"), {
+    setDoc(doc(db("manager"), "events/no-module-event"), {
       title: "Always available",
+      createdBy: "manager",
+      placeId: null,
+    }),
+  );
+  await assertSucceeds(
+    updateDoc(doc(db("manager"), "events/no-module-event"), {
+      title: "Edited without modules",
+    }),
+  );
+  await assertFails(
+    updateDoc(doc(db("manager"), "events/linked"), {
+      title: "Cannot edit third-party event",
     }),
   );
   await assertSucceeds(
@@ -924,7 +944,7 @@ test("manager e employee não promovem a si nem terceiros", async () => {
     );
   }
 });
-test("manager opera local, menu e eventos sem precisar de partner global", async () => {
+test("manager opera o local sem ganhar edição de eventos de terceiros", async () => {
   await assertSucceeds(
     updateDoc(doc(db("manager"), "places/one"), {
       name: "Edited",
@@ -932,10 +952,20 @@ test("manager opera local, menu e eventos sem precisar de partner global", async
     }),
   );
   await assertSucceeds(
+    setDoc(doc(db("manager"), "events/manager-owned"), {
+      title: "Own event",
+      createdBy: "manager",
+      placeId: "one",
+    }),
+  );
+  await assertSucceeds(
+    updateDoc(doc(db("manager"), "events/manager-owned"), { title: "Edited" }),
+  );
+  await assertFails(
     updateDoc(doc(db("manager"), "events/linked"), { title: "Edited" }),
   );
   await assertFails(
-    updateDoc(doc(db("manager"), "events/linked"), {
+    updateDoc(doc(db("manager"), "events/manager-owned"), {
       createdBy: "target",
       updatedAt: serverTimestamp(),
     }),
@@ -949,9 +979,9 @@ test("employee lê próprio vínculo, sem escrita operacional nem lista de membr
   await assertFails(
     updateDoc(doc(db("employee"), "places/one"), { name: "Denied" }),
   );
-  await assertFails(
+  await assertSucceeds(
     updateDoc(doc(db("employee"), "events/employee-event"), {
-      title: "Denied",
+      title: "Own event updated",
     }),
   );
 });
@@ -992,7 +1022,7 @@ test("revogação explícita prevalece sobre proprietário legado", async () => 
     updateDoc(doc(db("inactive"), "places/one"), { name: "Denied" }),
   );
 });
-test("admin ativo acessa todos os locais e membros", async () => {
+test("admin ativo acessa locais, mas só edita os próprios eventos", async () => {
   await assertSucceeds(
     updateDoc(doc(db("admin"), "places/two"), { name: "Admin" }),
   );
@@ -1003,19 +1033,35 @@ test("admin ativo acessa todos os locais e membros", async () => {
       createdAt: serverTimestamp(),
     }),
   );
-  await assertSucceeds(
+  await assertFails(
     updateDoc(doc(db("admin"), "events/linked"), { createdBy: "target" }),
+  );
+  await assertFails(
+    updateDoc(doc(db("admin"), "events/linked"), { title: "Admin edit" }),
+  );
+  await assertSucceeds(
+    setDoc(doc(db("admin"), "events/admin-owned"), {
+      title: "Admin event",
+      createdBy: "admin",
+      placeId: null,
+    }),
+  );
+  await assertSucceeds(
+    updateDoc(doc(db("admin"), "events/admin-owned"), { title: "Own edit" }),
   );
 });
 test("somente admin ativo define evento em destaque", async () => {
   await assertSucceeds(
-    updateDoc(doc(db("manager"), "events/linked"), {
-      title: "Show legado editado",
-      featured: false,
+    setDoc(doc(db("manager"), "events/manager-feature-event"), {
+      title: "Manager event",
+      createdBy: "manager",
+      placeId: null,
     }),
   );
   await assertFails(
-    updateDoc(doc(db("manager"), "events/linked"), { featured: true }),
+    updateDoc(doc(db("manager"), "events/manager-feature-event"), {
+      featured: true,
+    }),
   );
   await assertFails(
     setDoc(doc(db("manager"), "events/new-featured"), {
@@ -1106,8 +1152,45 @@ test("compatibilidade de ownerId legado e partnerId", async () => {
 test("criação e mudança de vínculo de eventos respeitam o local", async () => {
   const event = { title: "Show", createdBy: "manager", placeId: "one" };
   await assertSucceeds(setDoc(doc(db("manager"), "events/new"), event));
+  await assertSucceeds(
+    setDoc(doc(db("outsider"), "events/existing-place"), {
+      title: "Evento em local existente",
+      createdBy: "outsider",
+      placeId: "two",
+    }),
+  );
+  await assertSucceeds(
+    setDoc(doc(db("outsider"), "events/standalone-new"), {
+      title: "Show independente",
+      createdBy: "outsider",
+      placeId: null,
+    }),
+  );
   await assertFails(
+    setDoc(doc(db("outsider"), "events/forged-owner"), {
+      title: "Owner falsificado",
+      createdBy: "target",
+      placeId: null,
+    }),
+  );
+  await assertFails(
+    setDoc(doc(db(), "events/anonymous"), {
+      title: "Sem sessão",
+      createdBy: "outsider",
+      placeId: null,
+    }),
+  );
+  await assertSucceeds(
+    updateDoc(doc(db("manager"), "events/new"), { placeId: "two" }),
+  );
+  await assertSucceeds(
     setDoc(doc(db("manager"), "events/wrong"), { ...event, placeId: "two" }),
+  );
+  await assertFails(
+    setDoc(doc(db("manager"), "events/missing-place"), {
+      ...event,
+      placeId: "missing",
+    }),
   );
   await assertFails(
     updateDoc(doc(db("manager"), "events/linked"), { placeId: "two" }),
@@ -1115,7 +1198,7 @@ test("criação e mudança de vínculo de eventos respeitam o local", async () =
   await assertSucceeds(
     updateDoc(doc(db("outsider"), "events/standalone"), { title: "Author" }),
   );
-  await assertSucceeds(
+  await assertFails(
     updateDoc(doc(db("owner"), "events/linked"), { createdBy: "target" }),
   );
 });
@@ -1146,6 +1229,175 @@ test("preserva login inicial e leitura pública por ID/slug", async () => {
   );
   await assertFails(getDoc(doc(db(), "places/one/members/manager")));
 });
+test("eventos: qualquer autenticado cria e edita somente sua autoria, sem privilégios de parceiro", async () => {
+  for (const uid of [
+    "outsider",
+    "admin",
+    "partner",
+    "owner",
+    "manager",
+    "revoked",
+    "inactive",
+    "no-profile",
+  ]) {
+    const client = db(uid);
+    for (const placeId of [null, "one"]) {
+      const ref = doc(client, `events/matrix-${uid}-${placeId ?? "custom"}`);
+      await assertSucceeds(
+        setDoc(ref, {
+          title: "New",
+          createdBy: uid,
+          placeId,
+          address: {
+            displayName: "Endereço personalizado",
+            latitude: -22,
+            longitude: -43,
+          },
+        }),
+      );
+      await assertSucceeds(updateDoc(ref, { title: "Own edit" }));
+      await assertFails(updateDoc(ref, { createdBy: "target" }));
+      await assertFails(updateDoc(ref, { createdBy: deleteField() }));
+      await assertFails(updateDoc(ref, { createdBy: { id: uid } }));
+    }
+    // Even the place owner and the platform admin cannot edit this author's event.
+    if (uid !== "outsider")
+      await assertFails(
+        updateDoc(doc(client, "events/linked"), { title: "Third-party edit" }),
+      );
+    await assertFails(
+      setDoc(doc(client, `events/forged-${uid}`), { createdBy: "target" }),
+    );
+    await assertFails(
+      setDoc(doc(client, `events/forged-map-${uid}`), {
+        createdBy: { id: uid },
+      }),
+    );
+  }
+  await assertFails(
+    setDoc(doc(db(), "events/anonymous-new"), { createdBy: "outsider" }),
+  );
+  await assertFails(
+    updateDoc(doc(db(), "events/linked"), { title: "Anonymous edit" }),
+  );
+  await assertSucceeds(getDoc(doc(db(), "events/linked")));
+});
+
+test("eventos: destaque é exceção administrativa restrita ao próprio campo", async () => {
+  const ref = (uid) => doc(db(uid), "events/linked");
+  await assertSucceeds(updateDoc(ref("admin"), { featured: true }));
+  await assertSucceeds(
+    updateDoc(ref("outsider"), { title: "Author keeps featured" }),
+  );
+  await assertFails(updateDoc(ref("outsider"), { featured: false }));
+  await assertFails(updateDoc(ref("outsider"), { featured: deleteField() }));
+  for (const uid of [
+    "owner",
+    "manager",
+    "partner",
+    "employee",
+    "inactive",
+    null,
+  ])
+    await assertFails(updateDoc(ref(uid), { featured: false }));
+  for (const patch of [
+    { featured: false, title: "Hidden content edit" },
+    { featured: false, createdBy: "admin" },
+    { featured: false, placeId: "two" },
+    { featured: false, views: increment(1) },
+    { featured: "yes" },
+    { featured: deleteField() },
+  ])
+    await assertFails(updateDoc(ref("admin"), patch));
+  await assertSucceeds(updateDoc(ref("admin"), { featured: false }));
+  await assertFails(
+    setDoc(doc(db("outsider"), "events/forged-feature"), {
+      createdBy: "outsider",
+      featured: true,
+    }),
+  );
+});
+
+test("eventos: métricas públicas não abrem acesso ao conteúdo ou à autoria", async () => {
+  for (const uid of [null, "outsider", "manager", "admin"]) {
+    const ref = doc(db(uid), "events/linked");
+    for (const field of ["views", "shares"]) {
+      await assertSucceeds(updateDoc(ref, { [field]: increment(1) }));
+      await assertFails(updateDoc(ref, { [field]: increment(2) }));
+      await assertFails(
+        updateDoc(ref, { [field]: increment(1), title: "Injected edit" }),
+      );
+      await assertFails(
+        updateDoc(ref, { [field]: increment(1), createdBy: "target" }),
+      );
+    }
+    await assertFails(updateDoc(ref, { boraCount: increment(1) }));
+    await assertFails(updateDoc(ref, { checkinCount: increment(1) }));
+  }
+});
+
+test("eventos: autoria legada e local removido são preservados sem migração", async () => {
+  await env.withSecurityRulesDisabled(async (context) => {
+    await setDoc(doc(context.firestore(), "events/legacy-author"), {
+      title: "Legacy",
+      createdBy: { id: "outsider", name: "Original" },
+      placeId: "removed-place",
+      legacyField: "preserve",
+    });
+  });
+  const ref = doc(db("outsider"), "events/legacy-author");
+  await assertSucceeds(updateDoc(ref, { title: "Author edit" }));
+  await assertFails(updateDoc(ref, { createdBy: "outsider" }));
+  await assertFails(updateDoc(ref, { "createdBy.name": "Changed" }));
+  await assertFails(
+    updateDoc(doc(db("admin"), "events/legacy-author"), {
+      title: "Admin edit",
+    }),
+  );
+  await assertSucceeds(updateDoc(ref, { placeId: null }));
+});
+
+test("eventos: interações válidas não autorizam alterações extras no documento", async () => {
+  for (const uid of ["employee", "admin", "outsider"]) {
+    const client = db(uid);
+    for (const [collectionName, field, interaction] of [
+      [
+        "boras",
+        "boraCount",
+        { eventId: "linked", user: { id: uid }, createdAt: serverTimestamp() },
+      ],
+      [
+        "checkins",
+        "checkinCount",
+        {
+          eventId: "linked",
+          user: { id: uid },
+          checkedInAt: serverTimestamp(),
+          latitude: -22,
+          longitude: -43,
+        },
+      ],
+    ]) {
+      for (const extra of [
+        { title: "Injected" },
+        { createdBy: "target" },
+        { featured: true },
+      ]) {
+        const batch = writeBatch(client);
+        batch.set(
+          doc(client, `events/linked/${collectionName}/${uid}`),
+          interaction,
+        );
+        batch.update(doc(client, "events/linked"), {
+          [field]: increment(1),
+          ...extra,
+        });
+        await assertFails(batch.commit());
+      }
+    }
+  }
+});
+
 test("Bora exige contador na mesma transação; atividade é privada", async () => {
   const client = db("employee");
   const batch = writeBatch(client);

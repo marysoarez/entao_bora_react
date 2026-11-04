@@ -1,11 +1,12 @@
 import { usePartnerAccess } from "../partner-access/PartnerAccess";
+import { canEditEvent } from "../../shared/eventPermissions";
 import { PlaceMembers } from "./PlaceMembers";
 import { OperationalDashboard } from "./OperationalDashboard";
 import { QrManagementPanel } from "../qr/QrManagementPanel";
 import { usePlaceModules } from "../place-modules/usePlaceModules";
 import { PlaceModuleNavigation } from "../place-modules/PlaceModuleNavigation";
 import { PlaceModuleSettings } from "../place-modules/PlaceModuleSettings";
-import { useEffect, useMemo, useState, type SyntheticEvent } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Link, useLocation, useSearchParams } from "react-router-dom";
 import {
   CalendarPlus,
@@ -14,17 +15,11 @@ import {
   Flame,
   LayoutDashboard,
   RefreshCw,
-  Send,
   Share2,
   Store,
 } from "lucide-react";
 import { Button, buttonVariants } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { owned, transferEvent } from "../../core/repository";
-import {
-  searchEventTransferRecipients,
-  type TransferRecipient,
-} from "../../core/eventTransferService";
+import { owned } from "../../core/repository";
 import { formatDate } from "../../shared/domain";
 import { genres, type Event, type Place } from "../../shared/models";
 import { Field } from "../../shared/ui/Field";
@@ -50,16 +45,6 @@ export function PartnerDashboardPage() {
   const [events, setEvents] = useState<Event[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
-  const [selectedEvent, setSelectedEvent] = useState("");
-  const [recipientQuery, setRecipientQuery] = useState("");
-  const [recipients, setRecipients] = useState<TransferRecipient[]>([]);
-  const [selectedRecipient, setSelectedRecipient] =
-    useState<TransferRecipient | null>(null);
-  const [searchingRecipients, setSearchingRecipients] = useState(false);
-  const [recipientError, setRecipientError] = useState("");
-  const [transferSuccess, setTransferSuccess] = useState("");
-  const [busy, setBusy] = useState(false);
-
   const selectedPlace = useMemo(() => {
     const requested = params.get("placeId");
     return (
@@ -85,50 +70,6 @@ export function PartnerDashboardPage() {
     () => eventsForPlace(events, selectedPlace?.id),
     [events, selectedPlace],
   );
-  const transferEventDetails = events.find((event) => event.id === selectedEvent);
-
-  useEffect(() => {
-    const term = recipientQuery.trim();
-    if (!selectedEvent || selectedRecipient || term.length < 2) {
-      setRecipients([]);
-      setRecipientError("");
-      setSearchingRecipients(false);
-      return;
-    }
-    let active = true;
-    setSearchingRecipients(true);
-    const timeout = window.setTimeout(async () => {
-      setRecipientError("");
-      try {
-        const result = await searchEventTransferRecipients(selectedEvent, term);
-        if (active) setRecipients(result);
-      } catch (cause) {
-        if (active) {
-          const error = cause as Error & { code?: string; stage?: string };
-          const friendlyMessage = error.code === "functions/permission-denied"
-            ? "Sua conta não tem permissão para buscar destinatários deste evento."
-            : error.code === "functions/unauthenticated"
-              ? "Sua sessão expirou. Entre novamente para buscar destinatários."
-              : error.code === "functions/resource-exhausted"
-                ? "Há muitos perfis semelhantes. Digite mais caracteres para refinar a busca."
-                : error.message;
-          const diagnostics = [error.code, error.stage && `etapa: ${error.stage}`]
-            .filter(Boolean)
-            .join(" · ");
-          setRecipientError(
-            `${friendlyMessage}${diagnostics ? ` (${diagnostics})` : ""}`,
-          );
-        }
-      } finally {
-        if (active) setSearchingRecipients(false);
-      }
-    }, 300);
-    return () => {
-      active = false;
-      window.clearTimeout(timeout);
-    };
-  }, [recipientQuery, selectedEvent, selectedRecipient]);
-
   async function load() {
     if (!user) return;
     setLoading(true);
@@ -173,28 +114,6 @@ export function PartnerDashboardPage() {
     }
   }, [params, places, setParams]);
 
-  async function submitTransfer(event: SyntheticEvent<HTMLFormElement>) {
-    event.preventDefault();
-    if (!user || !selectedEvent || !selectedRecipient || busy) return;
-    setBusy(true);
-    setError("");
-    try {
-      await transferEvent(selectedEvent, selectedRecipient.id, user);
-      setTransferSuccess(
-        `“${transferEventDetails?.title ?? "Evento"}” foi transferido para ${selectedRecipient.name}.`,
-      );
-      setSelectedEvent("");
-      setRecipientQuery("");
-      setSelectedRecipient(null);
-      setRecipients([]);
-      await load();
-    } catch (cause) {
-      setError((cause as Error).message);
-    } finally {
-      setBusy(false);
-    }
-  }
-
   if (loading || access.loading)
     return <Message>Carregando a gestão do estabelecimento…</Message>;
 
@@ -222,6 +141,9 @@ export function PartnerDashboardPage() {
             Cadastrar estabelecimento
           </Link>
         )}
+        <Link className={buttonVariants({ variant: "outline" })} to="/events/create">
+          Criar evento
+        </Link>
         {error && <Message>{error}</Message>}
       </div>
     );
@@ -267,11 +189,9 @@ export function PartnerDashboardPage() {
           </p>
         </div>
         <div className="partner-dashboard-heading-actions">
-          {(!selectedPlace || access.can(selectedPlace.id, "manageEvents")) && (
-            <Link className={buttonVariants()} to={createEventPath}>
-              <CalendarPlus size={17} /> Criar evento
-            </Link>
-          )}
+          <Link className={buttonVariants()} to={createEventPath}>
+            <CalendarPlus size={17} /> Criar evento
+          </Link>
           {access.canCreate && (
             <Link
               className={buttonVariants({ variant: "outline" })}
@@ -391,7 +311,6 @@ export function PartnerDashboardPage() {
           <span>{visibleEvents.length} evento(s)</span>
         </div>
         <div className="partner-event-list">
-          {transferSuccess && <Message>{transferSuccess}</Message>}
           {visibleEvents.map((event) => (
             <article className="partner-event-row" key={event.id}>
               <div>
@@ -450,118 +369,17 @@ export function PartnerDashboardPage() {
                 </div>
               </div>
               <div className="partner-event-actions">
-                {access.canEvent(event) && (
+                {canEditEvent(user, event) && (
                   <Link to={`/events/${event.id}/edit`}>Editar</Link>
                 )}
-                {access.canEvent(event, "transferEvents") && (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setTransferSuccess("");
-                      setSelectedEvent(event.id);
-                      setRecipientQuery("");
-                      setSelectedRecipient(null);
-                      setRecipients([]);
-                    }}
-                  >
-                    <Send size={15} /> Transferir
-                  </button>
-                )}
               </div>
-              {selectedEvent === event.id && access.canEvent(event, "transferEvents") && (
-                <form className="partner-transfer" onSubmit={submitTransfer}>
-                  <div className="partner-transfer-heading">
-                    <div>
-                      <span className="eyebrow">REVISÃO DA TRANSFERÊNCIA</span>
-                      <h3>Confirme o evento e o novo responsável</h3>
-                    </div>
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      disabled={busy}
-                      onClick={() => setSelectedEvent("")}
-                    >
-                      Cancelar
-                    </Button>
-                  </div>
-                  <div className="partner-transfer-review">
-                    <div>
-                      <span>EVENTO</span>
-                      <strong>{event.title}</strong>
-                      <small>{formatDate(event.startDate)} · {event.locationName}</small>
-                    </div>
-                    <div aria-hidden="true" className="partner-transfer-arrow">→</div>
-                    <div>
-                      <span>NOVO RESPONSÁVEL</span>
-                      {selectedRecipient ? (
-                        <>
-                          <strong>{selectedRecipient.name}</strong>
-                          <small>{selectedRecipient.email || "E-mail não informado"}</small>
-                        </>
-                      ) : (
-                        <strong className="subtle">Selecione uma pessoa abaixo</strong>
-                      )}
-                    </div>
-                  </div>
-                  {!selectedRecipient ? (
-                    <Field label="Buscar destinatário por nome ou e-mail">
-                      <Input
-                        autoComplete="off"
-                        value={recipientQuery}
-                        onChange={(inputEvent) => {
-                          setRecipientQuery(inputEvent.target.value);
-                          setRecipients([]);
-                        }}
-                        placeholder="Digite ao menos 2 caracteres"
-                      />
-                      <small>Pesquise por qualquer trecho com pelo menos 2 caracteres do nome ou do e-mail.</small>
-                      {searchingRecipients && <small role="status" aria-live="polite">Buscando pessoas…</small>}
-                      {recipientError && <small role="alert">{recipientError}</small>}
-                      {!!recipients.length && (
-                        <div className="partner-transfer-results" aria-label="Resultados da busca">
-                          {recipients.map((recipient) => (
-                            <button
-                              type="button"
-                              key={recipient.id}
-                              onClick={() => setSelectedRecipient(recipient)}
-                            >
-                              <strong>{recipient.name || "Nome não informado"}</strong>
-                              <span>{recipient.email || "E-mail não informado"}</span>
-                            </button>
-                          ))}
-                        </div>
-                      )}
-                      {!searchingRecipients && recipientQuery.trim().length >= 2 && !recipients.length && !recipientError && (
-                        <small role="status" aria-live="polite">Nenhuma pessoa encontrada. Confira a grafia ou tente outro trecho do nome ou e-mail.</small>
-                      )}
-                    </Field>
-                  ) : (
-                    <Button
-                      type="button"
-                      variant="outline"
-                      onClick={() => setSelectedRecipient(null)}
-                    >
-                      Escolher outra pessoa
-                    </Button>
-                  )}
-                  <p>A transferência altera o responsável e mantém o vínculo com o estabelecimento.</p>
-                  <div className="form-actions">
-                    <Button type="submit" disabled={busy || !selectedRecipient}>
-                      {busy ? "Transferindo…" : "Confirmar transferência"}
-                    </Button>
-                  </div>
-                </form>
-              )}
             </article>
           ))}
         </div>
         {!visibleEvents.length && (
           <Message>
             Nenhum evento disponível para esta seleção.{" "}
-            {(!selectedPlace ||
-              access.can(selectedPlace.id, "manageEvents")) && (
-              <Link to={createEventPath}>Criar evento</Link>
-            )}
+            <Link to={createEventPath}>Criar evento</Link>
           </Message>
         )}
       </section>
