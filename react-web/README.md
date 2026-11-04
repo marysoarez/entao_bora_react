@@ -1,5 +1,7 @@
 # Então Bora — React Web
 
+Para entender como Flutter e React compartilham Firebase, coleções, Rules e Cloud Functions, comece por [Backend compartilhado](docs/shared-backend-architecture.md).
+
 O catálogo e a configuração de módulos do estabelecimento estão documentados em [Etapa 2 — módulos](docs/place-modules.md). Eventos existentes permanecem disponíveis, sem assinatura, e os demais módulos futuros são apresentados como planejados.
 
 A autorização por membros de estabelecimento está documentada em [Etapa 1 — membros e permissões](docs/place-memberships.md), incluindo matriz, compatibilidade, testes e estado das Rules locais. Essa descrição substitui as observações históricas abaixo sobre acesso exclusivamente por parceiro e ausência de Rules versionadas.

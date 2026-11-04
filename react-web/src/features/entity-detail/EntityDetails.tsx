@@ -14,17 +14,13 @@ import {
   watchPublic,
 } from "../../core/repository";
 import { configured } from "../../core/firebase";
-import {
-  formatDate,
-  imageSource,
-  locate,
-  safeUrl,
-} from "../../shared/domain";
+import { formatDate, imageSource, locate, safeUrl } from "../../shared/domain";
 import { genres, type Event, type Place } from "../../shared/models";
 import { useSession } from "../session";
 import { setPageMetadata } from "../../shared/metadata";
 import { EventCard } from "../events/components/EventCard";
 import { Message } from "../../shared/ui/Message";
+import { googleCalendarUrl } from "./googleCalendar";
 export function EntityDetails({ kind }: { kind: "events" | "places" }) {
   const access = usePartnerAccess();
   const { id = "" } = useParams(),
@@ -36,7 +32,9 @@ export function EntityDetails({ kind }: { kind: "events" | "places" }) {
     [loading, setLoading] = useState(true),
     [busy, setBusy] = useState(false),
     [bora, setBora] = useState(false),
-    [checked, setChecked] = useState(false);
+    [checked, setChecked] = useState(false),
+    [calendarConfirmation, setCalendarConfirmation] = useState(false),
+    [calendarFallbackUrl, setCalendarFallbackUrl] = useState("");
   const viewed = useRef(new Set<string>());
   useEffect(() => {
     let alive = true;
@@ -137,6 +135,55 @@ export function EntityDetails({ kind }: { kind: "events" | "places" }) {
     p = kind === "places" ? (entity as Place) : place,
     title = event ? event.title : (entity as Place).name,
     cover = event ? event.coverImage : (entity as Place).photos[0];
+  const eventId = entity.id;
+  function handleBoraClick() {
+    if (!user) {
+      void action(async () => {
+        await login();
+        setCalendarConfirmation(true);
+      });
+      return;
+    }
+    if (!bora) {
+      setCalendarConfirmation(true);
+      return;
+    }
+    void action(async () => {
+      setBora(await toggleBora(eventId, user));
+    });
+  }
+  function handleCalendarChoice(addToCalendar: boolean) {
+    if (!user || !event) {
+      setCalendarConfirmation(false);
+      setError("Sua sessão expirou. Entre novamente para marcar o Bora.");
+      return;
+    }
+    const calendarTab = addToCalendar
+      ? window.open("about:blank", "_blank")
+      : null;
+    if (calendarTab) calendarTab.opener = null;
+    setCalendarConfirmation(false);
+    setCalendarFallbackUrl("");
+    void action(async () => {
+      try {
+        const nextBora = await toggleBora(eventId, user);
+        setBora(nextBora);
+        if (nextBora && addToCalendar) {
+          const url = googleCalendarUrl(event);
+          if (calendarTab && !calendarTab.closed) {
+            calendarTab.location.href = url;
+          } else {
+            setCalendarFallbackUrl(url);
+          }
+        } else {
+          calendarTab?.close();
+        }
+      } catch (e) {
+        calendarTab?.close();
+        throw e;
+      }
+    });
+  }
   return (
     <>
       <Link to="/" className="subtle">
@@ -256,21 +303,44 @@ export function EntityDetails({ kind }: { kind: "events" | "places" }) {
                   Comprar ingresso ↗
                 </a>
               )}
-              <Button
-                disabled={busy}
-                onClick={() =>
-                  action(async () => {
-                    if (!user) {
-                      await login();
-                      return;
-                    }
-                    setBora(await toggleBora(entity.id, user));
-                  })
-                }
-              >
+              <Button disabled={busy} onClick={handleBoraClick}>
                 <Heart size={17} />
-                {bora ? "Você vai! Desmarcar" : "Então Bora!"}
+                {bora ? "Você vai! Desmarcar" : "Eu vou! Então Bora!"}
               </Button>
+              {calendarConfirmation && (
+                <div className="calendar-confirmation-backdrop">
+                  <section
+                    className="calendar-confirmation"
+                    role="dialog"
+                    aria-modal="true"
+                    aria-labelledby="calendar-confirmation-title"
+                    aria-describedby="calendar-confirmation-description"
+                  >
+                    <h2 id="calendar-confirmation-title">
+                      Adicionar ao calendário?
+                    </h2>
+                    <p id="calendar-confirmation-description">
+                      Deseja adicionar esse evento ao seu calendário?
+                    </p>
+                    <div className="calendar-confirmation-actions">
+                      <Button
+                        variant="outline"
+                        onClick={() => handleCalendarChoice(false)}
+                      >
+                        Marcar Bora sem adicionar
+                      </Button>
+                      <Button onClick={() => handleCalendarChoice(true)}>
+                        Adicionar ao Google Agenda
+                      </Button>
+                    </div>
+                  </section>
+                </div>
+              )}
+              {calendarFallbackUrl && (
+                <a href={calendarFallbackUrl} target="_blank" rel="noreferrer">
+                  Abrir evento no Google Agenda ↗
+                </a>
+              )}
               <Button
                 variant="outline"
                 disabled={busy || checked}
@@ -332,7 +402,9 @@ export function EntityDetails({ kind }: { kind: "events" | "places" }) {
             <Share2 size={16} />
             Compartilhar
           </Button>
-          {(event ? canEditEvent(user, event) : access.can(entity.id, "editPlace")) && (
+          {(event
+            ? canEditEvent(user, event)
+            : access.can(entity.id, "editPlace")) && (
             <Link to={`/${event ? "events" : "places"}/${entity.id}/edit`}>
               Editar informações
             </Link>
