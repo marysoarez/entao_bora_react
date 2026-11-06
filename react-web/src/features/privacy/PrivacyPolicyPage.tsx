@@ -79,7 +79,7 @@ export function PrivacyPolicyPage() {
         </nav>
         <div className="privacy-content">
           <p>
-            <strong>Última atualização: 23 de setembro de 2026</strong>
+            <strong>Última atualização: 6 de novembro de 2026</strong>
           </p>
           <p>
             O <strong>Então Bora</strong> respeita a sua privacidade e está
@@ -144,31 +144,73 @@ export function PrivacyPolicyPage() {
           <p>Não recebemos nem armazenamos a senha da sua conta Google.</p>
           <h3>2.2. Dados de localização</h3>
           <p>
-            Com sua autorização, o Então Bora poderá acessar a localização
-            aproximada ou precisa do dispositivo.
+            O Então Bora utiliza dados de localização aproximada ou precisa do
+            dispositivo, mediante autorização do usuário, para oferecer
+            funcionalidades relacionadas à descoberta de eventos,
+            estabelecimentos e realização de check-ins.
           </p>
           <p>A localização poderá ser utilizada para:</p>
           <ul>
-            <li>exibir eventos e estabelecimentos próximos;</li>
-            <li>calcular distâncias;</li>
-            <li>posicionar o usuário no mapa;</li>
-            <li>permitir funcionalidades relacionadas a check-in;</li>
+            <li>Exibir eventos e estabelecimentos próximos;</li>
+            <li>Calcular distâncias e posicionar o usuário no mapa;</li>
+            <li>Identificar atividades e eventos relevantes na região;</li>
+            <li>Validar check-ins manuais em eventos;</li>
             <li>
-              identificar atividades e eventos relevantes próximos ao usuário;
-            </li>
-            <li>
-              gerar informações agregadas, como mapas de interesse ou
-              concentração de usuários.
+              Realizar check-ins automáticos em estabelecimentos participantes,
+              quando a funcionalidade estiver ativada.
             </li>
           </ul>
           <p>
-            Quando necessário, o aplicativo solicitará a permissão
-            correspondente do sistema operacional.
+            <strong>Check-in manual em eventos</strong>
           </p>
           <p>
-            O usuário poderá alterar ou revogar a permissão de localização nas
-            configurações do dispositivo.
+            O usuário pode realizar check-in manualmente ao selecionar a opção
+            "Fazer check-in".
           </p>
+          <p>
+            Para validar a presença, o aplicativo utiliza a localização do
+            dispositivo enquanto está em uso, verificando se o usuário está a
+            até 100 metros do local do evento, durante seu período de realização.
+          </p>
+          <p>
+            As coordenadas e o horário do check-in são registrados nos serviços
+            Firebase utilizados pelo Então Bora.
+          </p>
+          <p>
+            <strong>Check-in automático em estabelecimentos</strong>
+          </p>
+          <p>
+            O check-in automático é uma funcionalidade opcional, ativada mediante
+            consentimento explícito do usuário.
+          </p>
+          <p>
+            Quando ativado e autorizado pelo sistema operacional, o Então Bora
+            poderá coletar dados de localização em segundo plano, inclusive
+            quando o aplicativo estiver minimizado, fechado ou não estiver em uso.
+          </p>
+          <p>
+            Essa localização é utilizada para identificar a presença do usuário
+            em estabelecimentos participantes, considerando a distância e o tempo
+            mínimo de permanência configurados para cada estabelecimento.
+          </p>
+          <p>
+            Os registros de check-in automático podem incluir o estabelecimento,
+            a identificação da conta do usuário e os horários de entrada e saída,
+            armazenados nos serviços Firebase utilizados pela plataforma.
+          </p>
+          <p>
+            <strong>Controle da localização</strong>
+          </p>
+          <p>
+            O usuário pode desativar o check-in automático nas configurações do
+            aplicativo ou revogar as permissões de localização nas configurações
+            do dispositivo.
+          </p>
+          <p>
+            A recusa da localização em segundo plano impede o funcionamento do
+            check-in automático, mas não impede a navegação geral pelo aplicativo.
+          </p>
+          <p>O Então Bora não vende os dados de localização dos usuários.</p>
           <h3>2.3. Interações dentro da plataforma</h3>
           <p>
             Podemos registrar determinadas ações realizadas no Então Bora,
@@ -405,17 +447,34 @@ export function PrivacyPolicyPage() {
           </p>
           <h2 id="secao-11">11. Permissões do dispositivo</h2>
           <p>
-            Algumas funcionalidades poderão solicitar permissões específicas do
-            dispositivo, como localização e notificações.
+            O Então Bora poderá solicitar permissões do dispositivo necessárias
+            ao funcionamento de determinadas funcionalidades, incluindo
+            localização e notificações.
           </p>
           <p>
-            Essas permissões serão solicitadas quando necessárias para
-            determinada funcionalidade e poderão ser revogadas pelo usuário
-            através das configurações do sistema operacional.
+            <strong>Localização durante o uso:</strong> utilizada para posicionar
+            o usuário no mapa, descobrir eventos próximos e validar check-ins
+            manuais em eventos.
           </p>
           <p>
-            A recusa ou revogação de determinada permissão poderá limitar apenas
-            as funcionalidades que dependem dela.
+            <strong>Localização em segundo plano:</strong> utilizada exclusivamente
+            quando o usuário ativa o check-in automático em estabelecimentos
+            participantes e concede as permissões necessárias.
+          </p>
+          <p>
+            Antes de solicitar acesso à localização em segundo plano, o aplicativo
+            apresenta uma declaração em destaque explicando a finalidade da coleta
+            e solicita o consentimento explícito do usuário.
+          </p>
+          <p>
+            O usuário pode negar ou revogar as permissões a qualquer momento pelas
+            configurações do dispositivo, bem como desativar o check-in automático
+            no aplicativo.
+          </p>
+          <p>
+            A recusa de determinada permissão poderá limitar as funcionalidades
+            que dependem dela, sem impedir o uso das demais funcionalidades
+            disponíveis.
           </p>
           <h2 id="secao-12">12. Serviços de terceiros</h2>
           <p>
@@ -468,7 +527,7 @@ export function PrivacyPolicyPage() {
           </p>
           <hr />
           <p>
-            <strong>Última atualização:</strong> 23 de setembro de 2026.
+            <strong>Última atualização:</strong> 6 de novembro de 2026.
           </p>
         </div>
       </div>
